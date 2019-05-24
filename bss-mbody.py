@@ -38,7 +38,7 @@ import pyhalbe.Coordinate as C
 
 
 def get_hicanns(center_hicann, n_kenyon):
-    np.random.seed()
+    np.random.seed(2)
     ID, ROW, COL = range(3)
     w = WAL()
     hood = w.get_neighbours(center_hicann, max_dist=3)
@@ -328,6 +328,7 @@ sys.stdout.flush()
 
 div_kc = 5
 central_hicann = 76
+# central_hicann = 107#76
 hicanns = get_hicanns(central_hicann, div_kc)
 # pprint(hicanns)
 nkc = int(np.ceil(args.nKC/float(div_kc)))
@@ -341,18 +342,18 @@ print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
 populations = {
     'antenna': pynnx.Pop(args.nAL, 'SpikeSourceArray',
                          {'spike_times': spike_times}, label='Antennae Lobe',
-                         hicann_id=hicanns['antenna']),
+                         hicann=hicanns['antenna']),
     'decision': pynnx.Pop(args.nDN, neuron_class,
                           decision_parameters, label='Decision Neurons',
-                          hicann_id=hicanns['decision']),
+                          hicann=hicanns['decision']),
 
     'inh_decision': pynnx.Pop(1, neuron_class,
                               decision_parameters, label='Inh Decision Neuron',
-                              hicann_id=hicanns['exciter']),
+                              hicann=hicanns['exciter']),
 
     'inh_kenyon': pynnx.Pop(1, neuron_class,
                             decision_parameters, label='Inh Kenyon Neuron',
-                            hicann_id=hicanns['feedback']),
+                            hicann=hicanns['feedback']),
 
     ### make neurons spike right before a new pattern is shown
     # 'tick': pynnx.Pop(1, 'SpikeSourceArray',
@@ -379,7 +380,8 @@ for i in range(div_kc):
     kpop = 'kenyon%d'%i
     populations[kpop] = pynnx.Pop(nkc, neuron_class,
                             kenyon_parameters, label='Kenyon Cell %d'%i,
-                            hicann_id=hicanns['kenyon'][i])
+                            hicann=hicanns['kenyon'][i],
+                            gmax=512)
     pynnx.set_recording(populations[kpop], 'spikes')
 
 pynnx.set_recording(populations['decision'], 'spikes')
@@ -504,15 +506,17 @@ for i in range(div_kc):
     kpop = 'kenyon%d'%i
     projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
                                 'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
-                                conn_params={'p_connect': args.probAL2KC}, label=kAL2KC)
+                                conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
+                                digital_weights=8
+                                )
 
     kKC2DN = 'KC_%d to DN'%i
     projections[kKC2DN] = pynnx.Proj(populations[kpop], populations['decision'],
                                 weights=None, delays=None,
-                                # conn_class='FromListConnector', 
-                                # conn_params={'conn_list': out_lists[i]}, 
-                                conn_class='FixedProbabilityConnector', 
-                                conn_params={'p_connect': 0.1}, 
+                                conn_class='FromListConnector', 
+                                conn_params={'conn_list': out_lists[i]}, 
+                                # conn_class='FixedProbabilityConnector', 
+                                # conn_params={'p_connect': 0.1}, 
                                 label=kKC2DN,
                                 stdp=stdp)
 

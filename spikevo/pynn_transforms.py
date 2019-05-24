@@ -70,6 +70,7 @@ class PyNNAL(object):
         self._first_run = True
         self._graph = Graph()
         self._projections = {}
+        self._populations = []
 
     def __del__(self):
         try:
@@ -188,21 +189,34 @@ class PyNNAL(object):
             if self._first_run:
                 # self._do_BSS_placement()
                 # self.marocco.skip_mapping = True
-                if bool(0):
-                    self.marocco.skip_mapping = False
-                    self.marocco.backend = PyMarocco.None
 
-                    sys.stdout.write('-------------FIRST RESET ----------------\n')
-                    sys.stdout.flush()
-                    self._sim.reset()
-                    
-                    sys.stdout.write('-------------FIRST RUN ----------------\n')
-                    sys.stdout.flush()
-                    self._sim.run(duration)
-                    
-                    self.marocco.skip_mapping = True                
-                    
-                    self._BSS_set_sthal_params(gmax, gmax_div) 
+                self.marocco.skip_mapping = False
+                self.marocco.backend = PyMarocco.None
+
+                sys.stdout.write('-------------FIRST RESET ----------------\n')
+                sys.stdout.flush()
+                self._sim.reset()
+                
+                sys.stdout.write('-------------FIRST RUN ----------------\n')
+                sys.stdout.flush()
+                self._sim.run(duration)
+                
+                self.marocco.skip_mapping = True
+                
+                wafer = self.BSS_runtime.wafer()                
+                hicanns_in_use = wafer.getAllocatedHicannCoordinates()
+                for p in self._populations:
+                    if p.hicann is None:
+                        continue
+
+                    p_gmax = p.gmax
+                    p_gmax = gmax if p_gmax is None else p_gmax
+                    for hicann in p.hicann:
+                        if hicann not in hicanns_in_use:
+                            continue
+                        
+                        self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
+
 
                 # scale into 4-bit res
                 # self.marocco.skip_mapping = True                
@@ -214,7 +228,7 @@ class PyNNAL(object):
                 runtime = self.BSS_runtime
                 digital_weight = 1
                 log_data = bool(1)
-                if bool(0):
+                if bool(1):
                     for k in self._projections:
                         to = self.get_target_pop_name(k)
                         min_w, max_w = mins_maxs[to]
@@ -222,9 +236,11 @@ class PyNNAL(object):
                         rtime_res = runtime.results()
                         synapses = rtime_res.synapse_routing.synapses()
                         proj_items = synapses.find(proj)
-
-        
-                        if not k.startswith('AL') and log_data:
+                        digital_w = digital_weight if proj._digital_weights_ is None \
+                                    else proj._digital_weights_
+                        
+                        # if not k.startswith('AL') and log_data:
+                        if log_data:
                             print('\n\n+++++++++++++++++++++++++++++++++++++++++++++++')
                             print('+++++++++++++++++++++++++++++++++++++++++++++++')
                             print('+++++++++++++++++++++++++++++++++++++++++++++++')
@@ -236,14 +252,14 @@ class PyNNAL(object):
                             print(proj.getPost())
                             print(rtime_res)
                             # pprint(dir(rtime_res.synapse_routing))
-                            print(synapses)
-                            print(synapses.size())
-                            print(synapses.unrealized_synapses())
+                            # print(synapses)
+                            print("synapses.size() %s"%synapses.size())
+                            print("synapses.unrealized_synapses() %s"%synapses.unrealized_synapses())
 
                             print("\nNum proj items %s"%len(proj_items))
                         for proj_item in proj_items:
                             synapse = proj_item.hardware_synapse()
-                            if not k.startswith('AL') and log_data:
+                            if not k.startswith('AL') and log_data and False:
                                 print('-----------------------------------------------')
                                 print(proj_item)
                                 # print(dir(proj_item))
@@ -256,13 +272,12 @@ class PyNNAL(object):
                                 # print(dir(synapse))
                             weight = mins_maxs[to][MIN]
                             # digital_weight = int(15 * (weight / mins_maxs[to][MAX]))
-                            # proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
-                            # proxy.weight = HICANN.SynapseWeight(digital_weight)
+                            proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
+                            proxy.weight = HICANN.SynapseWeight(digital_w)
                         
                     # sys.exit(0)
 
                 self._sim.run(duration)
-                
                 
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 self._first_run = False
@@ -300,7 +315,7 @@ class PyNNAL(object):
         return getattr(self._sim, obj_name)
     
     def Pop(self, size, cell_class, params, label=None, shape=None,
-        max_sub_size=None, hicann_id=None):
+        max_sub_size=None, hicann=None, gmax=None):
         # sys.stdout.write("{}\n".format(label))
         # sys.stdout.flush()
 
@@ -322,12 +337,17 @@ class PyNNAL(object):
                                         shape, max_sub_size=1)
             for pop_dict in spop._populations:
                 pop = pop_dict['pop']
-                if hicann_id is not None:
+                
+                if hicann is not None:
                     # print(help(self.marocco.manual_placement.on_hicann))
                     # print(hicann_id)
-                    self.marocco.manual_placement.on_hicann(pop, hicann_id)
-
+                    self.marocco.manual_placement.on_hicann(pop, hicann)
+                    
+            
+            pop.hicann = hicann
+            pop.gmax = gmax
             self._graph.add(pop, is_source_pop)
+            self._populations.append(pop)
             if self._graph.width < 1:
                 self._graph.width = 1
 
@@ -336,12 +356,17 @@ class PyNNAL(object):
         elif size <= max_sub_size or is_source_pop:
             if self._ver() == 7:
                 pop = sim.Population(size, cell_class, params, label=label)
-                if self._sim_name == BSS and hicann_id is not None:
-                    self.marocco.manual_placement.on_hicann(pop, hicann_id)
+                
+                if self._sim_name == BSS and hicann is not None:
+                    self.marocco.manual_placement.on_hicann(pop, hicann)
             else:
                 pop = sim.Population(size, cell_class(**params), label=label)
 
+            pop.hicann = hicann
+            pop.gmax = gmax
             self._graph.add(pop, is_source_pop)
+            self._populations.append(pop)
+            
             if self._graph.width < 1:
                 self._graph.width = 1
 
@@ -372,7 +397,8 @@ class PyNNAL(object):
 
 
     def Proj(self, source_pop, dest_pop, conn_class, weights, delays, 
-             target='excitatory', stdp=None, label=None, conn_params={}):
+             target='excitatory', stdp=None, label=None, conn_params={},
+             digital_weights=None):
 
         if isinstance(source_pop, SplitPop) or \
             isinstance(dest_pop, SplitPop):
@@ -427,15 +453,16 @@ class PyNNAL(object):
                 w_max = stdp['weight_dependence']['params']['w_max']
             else:
                 syn_dyn = None
-                w_min = np.min(np.abs(weights))
+                if isinstance(weights, np.ndarray) or \
+                    isinstance(weights, list):
+                    whr = np.where(np.abs(weights) > 0.0)
+                    w_min = np.min(np.abs(weights[whr]))
+                else:
+                    w_min = np.min(np.abs(weights))
                 w_max = np.max(np.abs(weights))
 
             proj = sim.Projection(pre_pop, dest_pop, conn,
                     target=target, synapse_dynamics=syn_dyn, label=label)
-            proj.target = target
-            proj.weights = weights
-            proj.w_min = w_min
-            proj.w_max = w_max
         else:
             if stdp is not None:
                 ### Compatibility between versions - change parameters to the other description
@@ -453,8 +480,19 @@ class PyNNAL(object):
                     timing_dependence=self._get_stdp_dep(stdp['timing_dependence']),
                     weight_dependence=self._get_stdp_dep(stdp['weight_dependence']),
                     weight=weights, delay=delays)
+                
+                w_min = stdp['weight_dependence']['params']['w_min']
+                w_max = stdp['weight_dependence']['params']['w_max']
+
             else:
                 synapse = sim.StaticSynapse(weight=weights, delay=delays)
+                if isinstance(weights, np.ndarray) or \
+                    isinstance(weights, list):
+                    whr = np.where(np.abs(weights) > 0.0)
+                    w_min = np.min(np.abs(weights[whr]))
+                else:
+                    w_min = np.min(np.abs(weights))
+                w_max = np.max(np.abs(weights))
 
             proj = sim.Projection(source_pop, dest_pop, conn_class(**conn_params),
                     synapse_type=synapse, receptor_type=target, label=label)
@@ -463,6 +501,14 @@ class PyNNAL(object):
         # print(label)
         # print(source_pop)
         # print(dest_pop)
+        
+        proj._digital_weights_ = digital_weights
+        
+        proj.target = target
+        proj.weights = weights
+        proj.w_min = w_min
+        proj.w_max = w_max
+
         self._graph.plug(source_pop, dest_pop)
         self._projections[label] = proj
         return proj
@@ -554,34 +600,35 @@ class PyNNAL(object):
         wafer = self.BSS_runtime.wafer()
         # for all HICANNs in use
         for hicann in wafer.getAllocatedHicannCoordinates():
+            self._BSS_set_hicann_sthal_params(wafer, hicann, gmax, gmax_div)
 
-            fgs = wafer[hicann].floating_gates
 
-            # set parameters influencing the synaptic strength
-            for block in C.iter_all(C.FGBlockOnHICANN):
-                fgs.setShared(block, HICANN.shared_parameter.V_gmax0, gmax)
-                fgs.setShared(block, HICANN.shared_parameter.V_gmax1, gmax)
-                fgs.setShared(block, HICANN.shared_parameter.V_gmax2, gmax)
-                fgs.setShared(block, HICANN.shared_parameter.V_gmax3, gmax)
+    def _BSS_set_hicann_sthal_params(self, wafer, hicann, gmax, gmax_div=1):
+        fgs = wafer[hicann].floating_gates
 
-            for driver in C.iter_all(C.SynapseDriverOnHICANN):
-                for row in C.iter_all(C.RowOnSynapseDriver):
-                    wafer[hicann].synapses[driver][row].set_gmax_div(
-                        C.left, gmax_div)
-                    wafer[hicann].synapses[driver][row].set_gmax_div(
-                        C.right, gmax_div)
+        # set parameters influencing the synaptic strength
+        for block in C.iter_all(C.FGBlockOnHICANN):
+            fgs.setShared(block, HICANN.shared_parameter.V_gmax0, gmax)
+            fgs.setShared(block, HICANN.shared_parameter.V_gmax1, gmax)
+            fgs.setShared(block, HICANN.shared_parameter.V_gmax2, gmax)
+            fgs.setShared(block, HICANN.shared_parameter.V_gmax3, gmax)
 
-            # don't change values below
-            for ii in xrange(fgs.getNoProgrammingPasses()):
-                cfg = fgs.getFGConfig(C.Enum(ii))
-                cfg.fg_biasn = 0
-                cfg.fg_bias = 0
-                fgs.setFGConfig(C.Enum(ii), cfg)
+        for driver in C.iter_all(C.SynapseDriverOnHICANN):
+            for row in C.iter_all(C.RowOnSynapseDriver):
+                wafer[hicann].synapses[driver][row].set_gmax_div(
+                    C.left, gmax_div)
+                wafer[hicann].synapses[driver][row].set_gmax_div(
+                    C.right, gmax_div)
 
-            for block in C.iter_all(C.FGBlockOnHICANN):
-                fgs.setShared(block, HICANN.shared_parameter.V_dllres, 275)
-                fgs.setShared(block, HICANN.shared_parameter.V_ccas, 800)
-                
-    
+        # don't change values below
+        for ii in xrange(fgs.getNoProgrammingPasses()):
+            cfg = fgs.getFGConfig(C.Enum(ii))
+            cfg.fg_biasn = 0
+            cfg.fg_bias = 0
+            fgs.setFGConfig(C.Enum(ii), cfg)
 
+        for block in C.iter_all(C.FGBlockOnHICANN):
+            fgs.setShared(block, HICANN.shared_parameter.V_dllres, 275)
+            fgs.setShared(block, HICANN.shared_parameter.V_ccas, 800)
+        
 
