@@ -203,34 +203,35 @@ class PyNNAL(object):
                 
                 self.marocco.skip_mapping = True
                 
-                wafer = self.BSS_runtime.wafer()                
-                hicanns_in_use = wafer.getAllocatedHicannCoordinates()
-                for p in self._populations:
-                    if p.hicann is None:
-                        continue
-
-                    p_gmax = p.gmax
-                    p_gmax = gmax if p_gmax is None else p_gmax
-                    for hicann in p.hicann:
-                        if hicann not in hicanns_in_use:
-                            continue
-                        
-                        self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
-
-
                 # scale into 4-bit res
                 # self.marocco.skip_mapping = True                
                 self.marocco.backend = PyMarocco.Hardware
                 # Full configuration during first step
                 self.marocco.hicann_configurator = pysthal.ParallelHICANNv4Configurator()
                 
+                # set gmax values per hicann
+                wafer = self.BSS_runtime.wafer()                
+                hicanns_in_use = wafer.getAllocatedHicannCoordinates()
+                for p in self._populations:
+                    if p.hicann is None:
+                        continue
+
+                    p_gmax = gmax if p.gmax is None else p_gmax
+                    for hicann in p.hicann:
+                        if hicann not in hicanns_in_use:
+                            continue
+                        
+                        self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
+                
+                #set digital weight value per proj
                 mins_maxs = self.get_min_max_weights(self._projections)
                 runtime = self.BSS_runtime
                 digital_weight = 1
                 log_data = bool(1)
                 if bool(1):
-                    for k in self._projections:
+                    for k in sorted(self._projections.keys()):
                         to = self.get_target_pop_name(k)
+                        fr = k.split(' to ')[0]
                         min_w, max_w = mins_maxs[to]
                         proj = self._projections[k]
                         rtime_res = runtime.results()
@@ -239,13 +240,13 @@ class PyNNAL(object):
                         digital_w = digital_weight if proj._digital_weights_ is None \
                                     else proj._digital_weights_
                         
-                        # if not k.startswith('AL') and log_data:
-                        if log_data:
-                            print('\n\n+++++++++++++++++++++++++++++++++++++++++++++++')
+                        if not k.startswith('AL') and log_data:
+                        # if log_data:
+                            print('\n+++++++++++++++++++++++++++++++++++++++++++++++')
                             print('+++++++++++++++++++++++++++++++++++++++++++++++')
                             print('+++++++++++++++++++++++++++++++++++++++++++++++')
 
-                            print('k = %s -> to = %s'%(k, to))
+                            print('from: %s\t->\tto: %s'%(fr, to))
                             print('min = %f, max = %f'%(min_w, max_w))
                             print(proj)
                             print(proj.getPre())
@@ -256,7 +257,7 @@ class PyNNAL(object):
                             print("synapses.size() %s"%synapses.size())
                             print("synapses.unrealized_synapses() %s"%synapses.unrealized_synapses())
 
-                            print("\nNum proj items %s"%len(proj_items))
+                            print("\nNum proj items %s\n\n"%len(proj_items))
                         for proj_item in proj_items:
                             synapse = proj_item.hardware_synapse()
                             if not k.startswith('AL') and log_data and False:
@@ -274,6 +275,7 @@ class PyNNAL(object):
                             # digital_weight = int(15 * (weight / mins_maxs[to][MAX]))
                             proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
                             proxy.weight = HICANN.SynapseWeight(digital_w)
+                            # proxy.weight = HICANN.SynapseWeight(0)
                         
                     # sys.exit(0)
 
@@ -424,7 +426,9 @@ class PyNNAL(object):
                         else source_pop
 
             if conn_text.startswith('From'):
-                tmp = conn_params.copy() 
+                tmp = conn_params.copy()
+                weights = np.array(conn_params['conn_list'])[:2]
+                delays = np.array(conn_params['conn_list'])[:3]
             else:
                 tmp = conn_params.copy()
                 tmp['weights'] = weights
