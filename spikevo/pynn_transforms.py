@@ -232,8 +232,8 @@ class PyNNAL(object):
                     for k in sorted(self._projections.keys()):
                         to = self.get_target_pop_name(k)
                         fr = k.split(' to ')[0]
-                        min_w, max_w = mins_maxs[to]
                         proj = self._projections[k]
+                        min_w, max_w = proj.w_min, proj.w_max
                         rtime_res = runtime.results()
                         synapses = rtime_res.synapse_routing.synapses()
                         proj_items = synapses.find(proj)
@@ -260,21 +260,39 @@ class PyNNAL(object):
                             print("\nNum proj items %s\n\n"%len(proj_items))
                         for proj_item in proj_items:
                             synapse = proj_item.hardware_synapse()
-                            if not k.startswith('AL') and log_data and False:
-                                print('-----------------------------------------------')
-                                print(proj_item)
+
+                            if not k.startswith('AL') and log_data and fr.startswith('KC') and to.startswith('DN') and False:
+                                print('\t-----------------------------------------------')
+                                # print(proj_item)
                                 # print(dir(proj_item))
-                                print("source %s, target %s"%(proj_item.source_neuron(), proj_item.target_neuron()))
-                                print("projection %s"%proj_item.projection())
-                                print("edge %s"%proj_item.edge())
+                                # print("\tsource %s, target %s"%(proj_item.source_neuron(), proj_item.target_neuron()))
+                                
+                                print("\tneuron %s\t->\t%s"%(proj_item.source_neuron().neuron_index(),
+                                                             proj_item.target_neuron().neuron_index()))
+                            
+                                # print("\tprojection %s"%proj_item.projection())
+                                # print("\tedge %s"%proj_item.edge())
                                 # print(dir(proj_item.edge()))
-                                print("value %s"%proj_item.edge().value())
-                                print("synapse %s\n"%synapse)
+                                # print("\tvalue %s"%proj_item.edge().value())
+                                # print("\tsynapse %s\n"%synapse)
                                 # print(dir(synapse))
-                            weight = mins_maxs[to][MIN]
+                            pre = proj_item.source_neuron().neuron_index()
+                            post = proj_item.target_neuron().neuron_index()
+                            thr = (min_w + max_w)/2.0
                             # digital_weight = int(15 * (weight / mins_maxs[to][MAX]))
+                            mw = proj.__weight_matrix[pre, post]
+                            if not np.isnan(mw):
+                                dw = digital_w if mw > thr else 0
+                                # print(mw, thr, dw)
+                            else:
+                                dw = digital_w
+
+                            if not k.startswith('AL') and log_data and fr.startswith('KC') and \
+                                to.startswith('DN') and dw == 1:
+                                print("\tdigital weight = %s"%(dw))
+
                             proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
-                            proxy.weight = HICANN.SynapseWeight(digital_w)
+                            proxy.weight = HICANN.SynapseWeight(dw)
                             # proxy.weight = HICANN.SynapseWeight(0)
                         
                     # sys.exit(0)
@@ -424,11 +442,21 @@ class PyNNAL(object):
             """ Extract output population from NestImagePopulation """
             pre_pop = source_pop.out if isinstance(source_pop, NestImagePopulation)\
                         else source_pop
-
+            
+            __weight_matrix = np.ones((source_pop.size, dest_pop.size)) * np.nan
+            
             if conn_text.startswith('From'):
                 tmp = conn_params.copy()
                 weights = np.array(conn_params['conn_list'])[:2]
+                thr = (np.min(weights) + np.max(weights)) / 2.0
+                total = float(weights.size)
+                above = (weights > thr).sum()
+                print("In Proj above %s / total %s = %s"%\
+                    (above, total, above/total))
                 delays = np.array(conn_params['conn_list'])[:3]
+                for row, col, w, d in conn_params['conn_list']:
+                    __weight_matrix[row, col] = w
+                
             else:
                 tmp = conn_params.copy()
                 tmp['weights'] = weights
@@ -464,9 +492,10 @@ class PyNNAL(object):
                 else:
                     w_min = np.min(np.abs(weights))
                 w_max = np.max(np.abs(weights))
-
+            
             proj = sim.Projection(pre_pop, dest_pop, conn,
                     target=target, synapse_dynamics=syn_dyn, label=label)
+            proj.__weight_matrix = __weight_matrix
         else:
             if stdp is not None:
                 ### Compatibility between versions - change parameters to the other description

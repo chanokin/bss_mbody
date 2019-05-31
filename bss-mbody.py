@@ -129,7 +129,11 @@ def output_connection_list(kenyon_size, decision_size, prob_active, active_weigh
     matrix[active, 2] = np.clip(np.random.normal(active_weight, active_weight * 0.2,
                                                  size=active.shape),
                                 0, clip_to)
-
+    
+    n_above = (matrix[:, 2] > (inactive_weight + active_weight)/2.0).sum()
+    n_total = float(matrix[:, 2].size)
+    print("n_above, n_total, n_above/n_total")
+    print(n_above, n_total, n_above/n_total)
     np.random.seed()
     # pprint(np.where(matrix[:, 2] < 0.0))
     # return matrix
@@ -328,8 +332,8 @@ sys.stdout.flush()
 
 div_kc = 5
 central_hicann = 76
-central_hicann = 107
-central_hicann = 171
+# central_hicann = 107
+# central_hicann = 171
 # central_hicann = 283
 # central_hicann = 275
 hicanns = get_hicanns(central_hicann, div_kc)
@@ -349,19 +353,19 @@ populations = {
     'decision': pynnx.Pop(args.nDN, neuron_class,
                           decision_parameters, label='Decision Neurons',
                           hicann=hicanns['decision'],
-                          # gmax=2
+                          gmax=2
                           ),
 
     'inh_decision': pynnx.Pop(1, neuron_class,
                               decision_parameters, label='Inh Decision Neuron',
                               hicann=hicanns['exciter'],
-                              # gmax=1024
+                              gmax=1024
                               ),
 
     'inh_kenyon': pynnx.Pop(1, neuron_class,
                             decision_parameters, label='Inh Kenyon Neuron',
                             hicann=hicanns['feedback'],
-                            # gmax=1024
+                            gmax=1024
                             ),
 
     ### make neurons spike right before a new pattern is shown
@@ -390,7 +394,7 @@ for i in range(div_kc):
     populations[kpop] = pynnx.Pop(nkc, neuron_class,
                             kenyon_parameters, label='Kenyon Cell %d'%i,
                             hicann=hicanns['kenyon'][i],
-                            # gmax=2
+                            gmax=2
                             )
     pynnx.set_recording(populations[kpop], 'spikes')
 
@@ -410,10 +414,10 @@ sys.stdout.flush()
 
 static_w = {
     'AL to KC': W2S * 1.0 * (100.0 / float(args.nAL)),
-    'KC to KC': -W2S * (1.0 * (2500.0 / float(args.nKC))),
+    'KC to KC': W2S * (1.0 * (2500.0 / float(args.nKC))),
 
-    'KC to DN': W2S * (1.0 * (2500.0 / float(args.nKC))),
-    'DN to DN': -W2S * (5.0 * (100.0 / float(args.nDN))),
+    'KC to DN': W2S * (0.01 * (2500.0 / float(args.nKC))),
+    'DN to DN': W2S * (5.0 * (100.0 / float(args.nDN))),
 
     'DN to FB': W2S * (0.75 * (100.0 / float(args.nDN))),
     'FB to DN': W2S * (1.5 * (100.0 / float(args.nDN))),
@@ -426,9 +430,10 @@ static_w = {
     # 'TRS to TR': W2S * (0.000001 * (100.0 / float(args.nDN))),
     # 'TR to DN':  W2S * (0.00000001 * (100.0 / float(args.nDN))),
     
-    'INH': -0.1,
+    'INH': 1.0,
     'EXC': 1.0,
 }
+pprint(static_w)
 
 rand_w = {
     'AL to KC': static_w['AL to KC'],
@@ -479,12 +484,14 @@ projections = {
     'DN to IDN': pynnx.Proj(populations['decision'], populations['inh_decision'],
                            'AllToAllConnector', weights=static_w['EXC'], delays=timestep,
                            conn_params={'allow_self_connections': True}, target='excitatory', label='DN to IDN',
-                           digital_weights=15),
+                           digital_weights=15
+                           ),
 
     'IDN to DN': pynnx.Proj(populations['inh_decision'], populations['decision'],
                            'AllToAllConnector', weights=static_w['INH'], delays=timestep,
                            conn_params={'allow_self_connections': True}, target='inhibitory', label='IDN to DN',
-                           digital_weights=15),
+                           digital_weights=15
+                           ),
 
     ### make decision spike just before the next pattern to reduce weights corresponding to that input
     # 'DN to FB': pynnx.Proj(populations['decision'], populations['feedback'],
@@ -531,7 +538,7 @@ for i in range(div_kc):
                                 # conn_params={'p_connect': 0.1}, 
                                 label=kKC2DN,
                                 #stdp=stdp,
-                                digital_weights=4
+                                digital_weights=1
                                 )
 
     kKC2IKC = 'KC_%d to IKC'%i
