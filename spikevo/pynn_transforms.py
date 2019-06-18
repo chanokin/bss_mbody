@@ -15,6 +15,7 @@ from .partitioning import SplitPop, SplitPopulation, \
 
 import os
 from pprint import pprint
+from analyse_run import get_high_spiking
 
 
 try:
@@ -70,7 +71,7 @@ class PyNNAL(object):
         self._first_run = True
         self._graph = Graph()
         self._projections = {}
-        self._populations = []
+        self._populations = {}
 
     def __del__(self):
         try:
@@ -160,6 +161,14 @@ class PyNNAL(object):
         except:
             to, n = to_n, None
         return to
+
+    def get_source_pop_name(self, key):
+        [frm_n, to_n] = key.split(' to ')
+        try:
+            [frm, n] = frm_n.split('_')
+        except:
+            frm, n = frm_n, None
+        return frm
         
     def get_min_max_weights(self, projections):
         mins_maxs = {}
@@ -182,8 +191,49 @@ class PyNNAL(object):
             mins_maxs[to] = to_vals
 
         return mins_maxs
-            
-    def run(self, duration, gmax=1023, gmax_div=1, min_max_weights=None):
+    
+    def set_digital_weights(self, digital_weight=15, zero_all=False, blacklists={}):
+        runtime = self.BSS_runtime
+        for k in sorted(self._projections.keys()):
+            to = self.get_target_pop_name(k)
+            fr = self.get_source_pop_name(k)
+            [raw_fr, raw_to] = k.split(' to ')
+            proj = self._projections[k]
+            min_w, max_w = proj.w_min, proj.w_max
+            rtime_res = runtime.results()
+            synapses = rtime_res.synapse_routing.synapses()
+            proj_items = synapses.find(proj)
+            digital_w = digital_weight if proj._digital_weights_ is None \
+                        else proj._digital_weights_
+            fr_black = blacklists.get(raw_fr, {})
+            to_black = blacklists.get(raw_to, {})
+            for proj_item in proj_items:
+                synapse = proj_item.hardware_synapse()
+
+                pre = proj_item.source_neuron().neuron_index()
+                post = proj_item.target_neuron().neuron_index()
+                
+                thr = (min_w + max_w)/2.0
+                mw = proj.__weight_matrix[pre, post]
+                if np.isnan(mw):
+                    dw = 0
+                else:
+                    if mw < thr or zero_all or \
+                        pre in fr_black or post in to_black:
+                        dw = 0
+                    else:
+                        dw = digital_w
+
+                proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
+                proxy.weight = HICANN.SynapseWeight(dw)
+
+
+
+    def run(self, duration, gmax=1023, gmax_div=1, min_max_weights=None, 
+            noise_count_thresh=100):
+        """:param noise_count_thres: how many times in the experiment should a neuron spike
+        to be considered a noisy neuron
+        """
         MIN, MAX = 0, 1
         if self.sim_name == BSS:
             if self._first_run:
@@ -212,11 +262,13 @@ class PyNNAL(object):
                 # set gmax values per hicann
                 wafer = self.BSS_runtime.wafer()                
                 hicanns_in_use = wafer.getAllocatedHicannCoordinates()
-                for p in self._populations:
+                for k in self._populations:
+                    p = self._populations[k]
                     if p.hicann is None:
                         continue
 
-                    p_gmax = gmax if p.gmax is None else p_gmax
+                    p_gmax = min(1023, gmax if p.gmax is None else p.gmax)
+                    
                     for hicann in p.hicann:
                         if hicann not in hicanns_in_use:
                             continue
@@ -224,84 +276,48 @@ class PyNNAL(object):
                         self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
                 
                 #set digital weight value per proj
-                mins_maxs = self.get_min_max_weights(self._projections)
-                runtime = self.BSS_runtime
-                digital_weight = 1
-                log_data = bool(1)
-                if bool(1):
-                    for k in sorted(self._projections.keys()):
-                        to = self.get_target_pop_name(k)
-                        fr = k.split(' to ')[0]
-                        proj = self._projections[k]
-                        min_w, max_w = proj.w_min, proj.w_max
-                        rtime_res = runtime.results()
-                        synapses = rtime_res.synapse_routing.synapses()
-                        proj_items = synapses.find(proj)
-                        digital_w = digital_weight if proj._digital_weights_ is None \
-                                    else proj._digital_weights_
-                        
-                        if not k.startswith('AL') and log_data:
-                        # if log_data:
-                            print('\n+++++++++++++++++++++++++++++++++++++++++++++++')
-                            print('+++++++++++++++++++++++++++++++++++++++++++++++')
-                            print('+++++++++++++++++++++++++++++++++++++++++++++++')
 
-                            print('from: %s\t->\tto: %s'%(fr, to))
-                            print('min = %f, max = %f'%(min_w, max_w))
-                            print(proj)
-                            print(proj.getPre())
-                            print(proj.getPost())
-                            print(rtime_res)
-                            # pprint(dir(rtime_res.synapse_routing))
-                            # print(synapses)
-                            print("synapses.size() %s"%synapses.size())
-                            print("synapses.unrealized_synapses() %s"%synapses.unrealized_synapses())
+### detecting noise neurons
+### this shouldn't be here!!! 
+### or it should only depend on the type of population, i.e. non-source ones
+### pop.__class__.__name__.lower().startswith('SpikeSource') <=> continue!
+                self.set_digital_weights(zero_all=True)
+                self._sim.run(1000.0) #ms
 
-                            print("\nNum proj items %s\n\n"%len(proj_items))
-                        for proj_item in proj_items:
-                            synapse = proj_item.hardware_synapse()
-
-                            if not k.startswith('AL') and log_data and fr.startswith('KC') and to.startswith('DN') and False:
-                                print('\t-----------------------------------------------')
-                                # print(proj_item)
-                                # print(dir(proj_item))
-                                # print("\tsource %s, target %s"%(proj_item.source_neuron(), proj_item.target_neuron()))
-                                
-                                print("\tneuron %s\t->\t%s"%(proj_item.source_neuron().neuron_index(),
-                                                             proj_item.target_neuron().neuron_index()))
-                            
-                                # print("\tprojection %s"%proj_item.projection())
-                                # print("\tedge %s"%proj_item.edge())
-                                # print(dir(proj_item.edge()))
-                                # print("\tvalue %s"%proj_item.edge().value())
-                                # print("\tsynapse %s\n"%synapse)
-                                # print(dir(synapse))
-                            pre = proj_item.source_neuron().neuron_index()
-                            post = proj_item.target_neuron().neuron_index()
-                            thr = (min_w + max_w)/2.0
-                            # digital_weight = int(15 * (weight / mins_maxs[to][MAX]))
-                            mw = proj.__weight_matrix[pre, post]
-                            if not np.isnan(mw):
-                                dw = digital_w if mw > thr else 0
-                                # print(mw, thr, dw)
-                            else:
-                                dw = digital_w
-
-                            if not k.startswith('AL') and log_data and fr.startswith('KC') and \
-                                to.startswith('DN') and dw == 1:
-                                print("\tdigital weight = %s"%(dw))
-
-                            proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
-                            proxy.weight = HICANN.SynapseWeight(dw)
-                            # proxy.weight = HICANN.SynapseWeight(0)
-                        
-                    # sys.exit(0)
-
-                self._sim.run(duration)
+                pre_labels = [k for k in self._populations.keys() \
+                                if k.lower().startswith('kenyon')]
                 
+                pre_spikes = {
+                    k: self.get_spikes(self._populations[k]) for k in pre_labels
+                }
+                
+                hi_pre = {
+                    k: get_high_spiking(pre_spikes[k], 0, 1000, noise_count_threshold) \
+                                                                        for k in pre_spikes
+                }
+                
+                post_spikes = self.get_spikes(self._populations['Decision Neurons'])
+                hi_post = get_high_spiking(post_spikes, 0, duration, noise_count_threshold)
+                
+                pprint(hi_pre)
+                pprint(hi_post)
+                self._bss_blacklists = {
+                    k: hi_pre[k].keys() for k in hi_pre
+                }
+                self._bss_blacklists['DN'] = hi_post.keys(),
+                
+                
+                pynn.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 self._first_run = False
+### end of detecting noise neurons
+                self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
+                self._sim.run(duration)
             else:
+                pynn.reset()
+                self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
+                
+                self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
                 self._sim.run(duration)
         else:
             if self._first_run:
@@ -367,7 +383,7 @@ class PyNNAL(object):
             pop.hicann = hicann
             pop.gmax = gmax
             self._graph.add(pop, is_source_pop)
-            self._populations.append(pop)
+            self._populations[label] = pop
             if self._graph.width < 1:
                 self._graph.width = 1
 
@@ -385,7 +401,7 @@ class PyNNAL(object):
             pop.hicann = hicann
             pop.gmax = gmax
             self._graph.add(pop, is_source_pop)
-            self._populations.append(pop)
+            self._populations[label] = pop
             
             if self._graph.width < 1:
                 self._graph.width = 1
@@ -447,13 +463,13 @@ class PyNNAL(object):
             
             if conn_text.startswith('From'):
                 tmp = conn_params.copy()
-                weights = np.array(conn_params['conn_list'])[:2]
+                weights = np.array(conn_params['conn_list'])[:,2]
                 thr = (np.min(weights) + np.max(weights)) / 2.0
                 total = float(weights.size)
                 above = (weights > thr).sum()
                 print("In Proj above %s / total %s = %s"%\
                     (above, total, above/total))
-                delays = np.array(conn_params['conn_list'])[:3]
+                delays = np.array(conn_params['conn_list'])[:,3]
                 for row, col, w, d in conn_params['conn_list']:
                     __weight_matrix[row, col] = w
                 

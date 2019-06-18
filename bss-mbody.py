@@ -17,6 +17,7 @@ import argparse
 from pprint import pprint
 from args_setup import get_args
 from input_utils import *
+from analyse_run import get_high_spiking
 
 # from pyhalbe import HICANN
 import pyhalbe.Coordinate as C
@@ -359,13 +360,13 @@ populations = {
     'inh_decision': pynnx.Pop(1, neuron_class,
                               decision_parameters, label='Inh Decision Neuron',
                               hicann=hicanns['exciter'],
-                              gmax=1024
+                              gmax=1023
                               ),
 
     'inh_kenyon': pynnx.Pop(1, neuron_class,
                             decision_parameters, label='Inh Kenyon Neuron',
                             hicann=hicanns['feedback'],
-                            gmax=1024
+                            gmax=1023
                             ),
 
     ### make neurons spike right before a new pattern is shown
@@ -640,6 +641,9 @@ k_spikes = [pynnx.get_record(populations[k], 'spikes') \
 sys.stdout.write('\tDecision\n')
 sys.stdout.flush()
 out_spikes = pynnx.get_record(populations['decision'], 'spikes')
+
+out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, 5)
+
 
 if record_all:
     # sys.stdout.write('\tHorn\n')
