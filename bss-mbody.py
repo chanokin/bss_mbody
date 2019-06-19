@@ -585,6 +585,7 @@ now = datetime.datetime.now()
 sys.stdout.write("\tstarting time is {:02d}:{:02d}:{:02d}\n".format(now.hour, now.minute, now.second))
 sys.stdout.flush()
 
+noise_count_threshold = 10
 tmp_w = []
 t0 = time.time()
 for loop in np.arange(n_loops):
@@ -596,9 +597,9 @@ for loop in np.arange(n_loops):
     sys.stdout.write("starting {:02d}:{:02d}:{:02d}\t".format(now.hour, now.minute, now.second))
     sys.stdout.flush()
 
-
+    ### ---------------------------------
+    ### run experiment 
     pynnx.run(weight_sample_dt)
-
 
     secs_to_run = time.time() - loop_t0
     mins_to_run = secs_to_run // 60
@@ -609,6 +610,9 @@ for loop in np.arange(n_loops):
 
     sys.stdout.write('lasted {:02d}h: {:02d}m: {:02d}s\n'.format(hours_to_run, mins_to_run, secs_to_run))
     sys.stdout.flush()
+
+    ### ---------------------------------
+    ### get weights from KCx to DN
     tmp_w[:] = []
     for k in sorted(projections.keys()):
         if k.startswith('KC') and k.endswith('to DN'):
@@ -616,6 +620,31 @@ for loop in np.arange(n_loops):
     
     # print(loop, tmp_w.shape)
     weights.append(tmp_w)
+    
+    ### ---------------------------------
+    ### grab spikes to do further learning (blacklist and structural plasticity)
+    sys.stdout.write('Getting spikes:\n')
+    sys.stdout.flush()
+
+    sys.stdout.write('\tKenyon\n')
+    sys.stdout.flush()
+    k_spikes = {k: pynnx.get_record(populations[k], 'spikes') \
+                for k in populations if k.startswith('kenyon')}
+    sys.stdout.write('\tDecision\n')
+    sys.stdout.flush()
+    out_spikes = pynnx.get_record(populations['decision'], 'spikes')
+    
+    ### ---------------------------------
+    ### get highest spiking neurons, 
+    k_high = {k: get_high_spiking(k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
+                for k in populations if k.startswith('kenyon')}
+    out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, noise_count_threshold)
+    
+    print(k_high)
+    print(out_high)
+    
+    print(pynnx._bss_blacklists)
+    
 
 post_horn = []
 secs_to_run = time.time() - t0
@@ -630,19 +659,6 @@ sys.stdout.write('\n\nDone!\tRunning simulation - lasted {:02d}h: {:02d}m: {:02d
                  format(hours_to_run, mins_to_run, secs_to_run))
 sys.stdout.flush()
 
-sys.stdout.write('Getting spikes:\n')
-sys.stdout.flush()
-
-sys.stdout.write('\tKenyon\n')
-sys.stdout.flush()
-k_spikes = [pynnx.get_record(populations[k], 'spikes') \
-            for k in populations if k.startswith('kenyon')]
-
-sys.stdout.write('\tDecision\n')
-sys.stdout.flush()
-out_spikes = pynnx.get_record(populations['decision'], 'spikes')
-
-out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, 5)
 
 
 if record_all:

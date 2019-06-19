@@ -230,7 +230,7 @@ class PyNNAL(object):
 
 
     def run(self, duration, gmax=1023, gmax_div=1, min_max_weights=None, 
-            noise_count_thresh=100):
+            noise_count_threshold=100):
         """:param noise_count_thres: how many times in the experiment should a neuron spike
         to be considered a noisy neuron
         """
@@ -283,7 +283,7 @@ class PyNNAL(object):
 ### pop.__class__.__name__.lower().startswith('SpikeSource') <=> continue!
                 self.set_digital_weights(zero_all=True)
                 self._sim.run(1000.0) #ms
-
+                init_noise_count = 5
                 pre_labels = [k for k in self._populations.keys() \
                                 if k.lower().startswith('kenyon')]
                 
@@ -292,29 +292,29 @@ class PyNNAL(object):
                 }
                 
                 hi_pre = {
-                    k: get_high_spiking(pre_spikes[k], 0, 1000, noise_count_threshold) \
-                                                                        for k in pre_spikes
+                    k: get_high_spiking(pre_spikes[k], 0, 1000, init_noise_count) for k in pre_spikes
                 }
                 
                 post_spikes = self.get_spikes(self._populations['Decision Neurons'])
-                hi_post = get_high_spiking(post_spikes, 0, duration, noise_count_threshold)
+                hi_post = get_high_spiking(post_spikes, 0, duration, init_noise_count)
                 
                 pprint(hi_pre)
                 pprint(hi_post)
                 self._bss_blacklists = {
-                    k: hi_pre[k].keys() for k in hi_pre
+                    k: set(hi_pre[k].keys()) for k in hi_pre
                 }
-                self._bss_blacklists['DN'] = hi_post.keys(),
+                self._bss_blacklists['DN'] = set(hi_post.keys()),
                 
                 
-                pynn.reset()
+                self._sim.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 self._first_run = False
+
 ### end of detecting noise neurons
                 self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
                 self._sim.run(duration)
             else:
-                pynn.reset()
+                self._sim.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 
                 self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
