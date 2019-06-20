@@ -281,9 +281,10 @@ class PyNNAL(object):
 ### this shouldn't be here!!! 
 ### or it should only depend on the type of population, i.e. non-source ones
 ### pop.__class__.__name__.lower().startswith('SpikeSource') <=> continue!
-                self.set_digital_weights(zero_all=True)
-                self._sim.run(1000.0) #ms
+                test_time = 500
                 init_noise_count = 5
+                self.set_digital_weights(zero_all=True)
+                self._sim.run(test_time) #ms
                 pre_labels = [k for k in self._populations.keys() \
                                 if k.lower().startswith('kenyon')]
                 
@@ -292,18 +293,20 @@ class PyNNAL(object):
                 }
                 
                 hi_pre = {
-                    k: get_high_spiking(pre_spikes[k], 0, 1000, init_noise_count) for k in pre_spikes
+                    k: get_high_spiking(pre_spikes[k], 0, test_time, init_noise_count) for k in pre_spikes
                 }
                 
                 post_spikes = self.get_spikes(self._populations['Decision Neurons'])
-                hi_post = get_high_spiking(post_spikes, 0, duration, init_noise_count)
+                hi_post = get_high_spiking(post_spikes, 0, test_time, init_noise_count)
                 
+                print("hi_pre")
                 pprint(hi_pre)
+                print("hi_post")
                 pprint(hi_post)
                 self._bss_blacklists = {
                     k: set(hi_pre[k].keys()) for k in hi_pre
                 }
-                self._bss_blacklists['DN'] = set(hi_post.keys()),
+                self._bss_blacklists['Decision Neurons'] = set(hi_post.keys())
                 
                 
                 self._sim.reset()

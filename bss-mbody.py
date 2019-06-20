@@ -17,7 +17,7 @@ import argparse
 from pprint import pprint
 from args_setup import get_args
 from input_utils import *
-from analyse_run import get_high_spiking
+from analyse_run import *
 
 # from pyhalbe import HICANN
 import pyhalbe.Coordinate as C
@@ -391,7 +391,7 @@ populations = {
 }
 
 for i in range(div_kc):
-    kpop = 'kenyon%d'%i
+    kpop = 'kenyon_%d'%i
     populations[kpop] = pynnx.Pop(nkc, neuron_class,
                             kenyon_parameters, label='Kenyon Cell %d'%i,
                             hicann=hicanns['kenyon'][i],
@@ -523,7 +523,7 @@ projections = {
 }
 for i in range(div_kc):
     kAL2KC = 'AL to KC_%d'%i
-    kpop = 'kenyon%d'%i
+    kpop = 'kenyon_%d'%i
     projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
                                 'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
                                 conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
@@ -566,7 +566,7 @@ for out_list in out_lists:
     starting_weights = np.zeros((nkc, args.nDN))
     for i, j, v, d in out_list:
         starting_weights[int(i), int(j)] = v
-    starting_weights = starting_weights.flatten()
+    starting_weights = starting_weights#.flatten()
     sweights.append(starting_weights)
 
 weights = [sweights]
@@ -586,7 +586,7 @@ sys.stdout.write("\tstarting time is {:02d}:{:02d}:{:02d}\n".format(now.hour, no
 sys.stdout.flush()
 
 noise_count_threshold = 10
-tmp_w = []
+tmp_w = {}
 t0 = time.time()
 for loop in np.arange(n_loops):
     sys.stdout.write("\trunning loop {} of {}\t".format(loop + 1, n_loops))
@@ -613,10 +613,10 @@ for loop in np.arange(n_loops):
 
     ### ---------------------------------
     ### get weights from KCx to DN
-    tmp_w[:] = []
+    tmp_w.clear()
     for k in sorted(projections.keys()):
         if k.startswith('KC') and k.endswith('to DN'):
-            tmp_w.append(pynnx.get_weights(projections[k]).flatten())
+            tmp_w[k] = pynnx.get_weights(projections[k])
     
     # print(loop, tmp_w.shape)
     weights.append(tmp_w)
@@ -629,21 +629,38 @@ for loop in np.arange(n_loops):
     sys.stdout.write('\tKenyon\n')
     sys.stdout.flush()
     k_spikes = {k: pynnx.get_record(populations[k], 'spikes') \
-                for k in populations if k.startswith('kenyon')}
+                for k in populations if k.lower().startswith('kenyon')}
+    bk_spikes = {k: bin_spikes_per_sample(0, weight_sample_dt, sample_dt, k_spikes[k]) \
+                 for k in populations if k.lower().startswith('kenyon')}
+    
     sys.stdout.write('\tDecision\n')
     sys.stdout.flush()
     out_spikes = pynnx.get_record(populations['decision'], 'spikes')
+    bout_spikes = bin_spikes_per_sample(0, weight_sample_dt, sample_dt, out_spikes)
     
     ### ---------------------------------
     ### get highest spiking neurons, 
     k_high = {k: get_high_spiking(k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
-                for k in populations if k.startswith('kenyon')}
+                for k in populations if k.lower().startswith('kenyon')}
     out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, noise_count_threshold)
     
     print(k_high)
     print(out_high)
     
     print(pynnx._bss_blacklists)
+    # Kenyon Cell %d
+    # Decision 
+    for k in bk_spikes:
+        print(k)
+        int_idx = int(k.split("_")[-1])
+        print(int_idx)
+        w_idx = "KC_%d to DN"%(int_idx)
+        pynnx_k = "Kenyon Cell %d"%int_idx
+        print(k, int_idx, w_idx, pynnx_k)
+        print(tmp_w[w_idx].shape)
+        print(pynnx._bss_blacklists["Decision Neurons"])
+        ws = structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
+                pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
     
 
 post_horn = []
