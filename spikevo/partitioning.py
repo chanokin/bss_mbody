@@ -183,7 +183,9 @@ class SplitProjection(object):
 
     ### This seems like reinventing the wheel and I shouldn't have to!
     def __init__(self, pynnal, source_pop, dest_pop, conn_class, weights, delays,
-                 target='excitatory', stdp=None, label=None, conn_params={}):
+                 target='excitatory', stdp=None, label=None, conn_params={},
+                digital_weights=None):
+        self.digital_weights = digital_weights
         self.pynnal = pynnal
         self.source = source_pop
         self.destination = dest_pop
@@ -265,7 +267,8 @@ class SplitProjection(object):
         # print(conn)
         # print(param_copy)
         return pynnal.Proj(pre['pop'], post['pop'], conn, w, d,
-                           target=tgt, stdp=stdp, label=lbl, conn_params=param_copy)
+                           target=tgt, stdp=stdp, label=lbl, conn_params=param_copy,
+                           digital_weights=self.digital_weights)
 
     def _sample(self, v, num):
         if np.isscalar(v):
@@ -281,7 +284,8 @@ class SplitProjection(object):
                 return None
             else:
                 return pynnal.Proj(pre['pop'], post['pop'], conn, w, d,
-                        target=tgt, stdp=stdp, label=lbl, conn_params=params)
+                        target=tgt, stdp=stdp, label=lbl, conn_params=params,
+                        digital_weights=self.digital_weights)
         else:
             indices = np.intersect1d(pre['ids'], post['ids'])
 
@@ -296,10 +300,11 @@ class SplitProjection(object):
                                                         for i, idx in enumerate(indices)]
 
             return pynnal.Proj(pre['pop'], post['pop'], 'FromListConnector', None, None,
-                               target=tgt, stdp=stdp, label=lbl, conn_params=params)
+                               target=tgt, stdp=stdp, label=lbl, conn_params=params,
+                               digital_weights=self.digital_weights)
 
     def all_to_all_connector(self, pre, post, conn, w, d, tgt, params, lbl, stdp=None):
-        return self.stats_connector(pre, post, conn, w, d, tgt, params, lbl, stdp)
+        return self.stats_connector(pre, post, conn, w, d, tgt, params, lbl, stdp,                  digital_weights=self.digital_weights)
 
     def from_list_connector(self, pre, post, conn, w, d, tgt, params, lbl, stdp=None):
         pynnal = self.pynnal
@@ -313,7 +318,8 @@ class SplitProjection(object):
         cp = {'conn_list': clist[whr, :]}
 
         return pynnal.Proj(pre['pop'], post['pop'], conn, w[whr], d[whr],
-                           target=tgt, stdp=stdp, label=lbl, conn_params=cp)
+                           target=tgt, stdp=stdp, label=lbl, conn_params=cp,
+                           digital_weights=self.digital_weights)
 
     def getWeights(self, format='array'):
         pynnal = self.pynnal

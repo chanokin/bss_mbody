@@ -14,6 +14,7 @@ from .partitioning import SplitPop, SplitPopulation, \
                           SplitArrayPopulation, SplitProjection
 
 import os
+import sys
 from pprint import pprint
 from analyse_run import get_high_spiking
 
@@ -195,10 +196,14 @@ class PyNNAL(object):
     def set_digital_weights(self, digital_weight=15, zero_all=False, blacklists={}):
         runtime = self.BSS_runtime
         for k in sorted(self._projections.keys()):
+            proj = self._projections[k]
+            if proj._digital_weights_ is None:
+                continue
+
+            dw_sum = 0
             to = self.get_target_pop_name(k)
             fr = self.get_source_pop_name(k)
             [raw_fr, raw_to] = k.split(' to ')
-            proj = self._projections[k]
             min_w, max_w = proj.w_min, proj.w_max
             rtime_res = runtime.results()
             synapses = rtime_res.synapse_routing.synapses()
@@ -224,10 +229,13 @@ class PyNNAL(object):
                     else:
                         dw = digital_w
 
+                dw_sum += int(dw > 0)
                 proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
                 proxy.weight = HICANN.SynapseWeight(dw)
 
-
+            print("\n\n-----------------------------------------------------------------")
+            print("projection %s sum of digital weights = %s \n\n"%(k, dw_sum))
+            
 
     def run(self, duration, gmax=1023, gmax_div=1, min_max_weights=None, 
             noise_count_threshold=100):
@@ -275,7 +283,6 @@ class PyNNAL(object):
                         
                         self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
                 
-                #set digital weight value per proj
 
 ### detecting noise neurons
 ### this shouldn't be here!!! 
@@ -299,28 +306,36 @@ class PyNNAL(object):
                 post_spikes = self.get_spikes(self._populations['Decision Neurons'])
                 hi_post = get_high_spiking(post_spikes, 0, test_time, init_noise_count)
                 
-                print("hi_pre")
-                pprint(hi_pre)
-                print("hi_post")
-                pprint(hi_post)
                 self._bss_blacklists = {
                     k: set(hi_pre[k].keys()) for k in hi_pre
                 }
                 self._bss_blacklists['Decision Neurons'] = set(hi_post.keys())
                 
+
+                # f = open("black_list_stats.txt", "a+")
+                # lengths = [str(len(self._bss_blacklists[k])) \
+                #             for k in sorted(self._bss_blacklists.keys())]
+                # line = ", ".join(lengths)
+                # f.write(u"%s\n"%line)
+                # f.close()
+
+
+                # print(sorted(self._bss_blacklists.keys()))
+                # print(lengths)
+                # sys.exit(0)
                 
                 self._sim.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 self._first_run = False
 
 ### end of detecting noise neurons
-                self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
+                self.set_digital_weights(blacklists=self._bss_blacklists)
                 self._sim.run(duration)
             else:
                 self._sim.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
                 
-                self.set_digital_weights(zero_all=True, blacklists=self._bss_blacklists)
+                self.set_digital_weights(blacklists=self._bss_blacklists)
                 self._sim.run(duration)
         else:
             if self._first_run:
@@ -443,8 +458,9 @@ class PyNNAL(object):
             isinstance(dest_pop, SplitPop):
             ### first argument is this PYNNAL instance, needed to loop back here!
             ### a bit spaghetti but it's less code :p
-            return SplitProjection(self, source_pop, dest_pop, conn_class, weights, delays,
-             target=target, stdp=stdp, label=label, conn_params=conn_params)
+            return SplitProjection(self, source_pop, dest_pop, conn_class, 
+                    weights, delays, target=target, stdp=stdp, label=label, 
+                    conn_params=conn_params, digital_weights=digital_weights)
             
         if is_string(conn_class): #convert from text representation to object
             conn_text = conn_class

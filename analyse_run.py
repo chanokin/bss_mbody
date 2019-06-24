@@ -77,12 +77,10 @@ def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights,
 
 
     #keep noisy neurons at bay ... hopefully
-    print(pre_blacklist)
     for pre in pre_blacklist: 
         pre = int(pre)
         ws[pre, :] = 0
 
-    print(post_blacklist)
     for post in post_blacklist:
         post = int(post)
         ws[:, post] = 0

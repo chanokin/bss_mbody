@@ -38,11 +38,15 @@ import pyhalbe.Coordinate as C
 # ])
 
 
-def get_hicanns(center_hicann, n_kenyon):
-    np.random.seed(2)
+def get_hicanns(center_hicann, n_kenyon, seed=1):
+    f = open("black_list_stats.txt", "a+")
+    f.write(u"%s, -*-\n"%seed)
+    f.close()
+
+    np.random.seed(seed)
     ID, ROW, COL = range(3)
     w = WAL()
-    hood = w.get_neighbours(center_hicann, max_dist=3)
+    hood = w.get_neighbours(center_hicann, max_dist=4)
     ids = []
     for r in hood:
         for c in hood[r]:
@@ -58,19 +62,12 @@ def get_hicanns(center_hicann, n_kenyon):
     ### ideal config is in a 3x3 grid
     places = {}
     used = []
-    for p in pops:
-        avail = np.setdiff1d(ids, used)
-        hicann_id = np.random.choice(avail, size=3)
-        hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
-        places[p] = hicann
-        for i in hicann_id:
-            used.append(i)
             
     k_places = []
     for i in range(n_kenyon):
         avail = np.setdiff1d(ids, used)
         np.random.choice(avail, size=n_kenyon, replace=False)
-        hicann_id = np.random.choice(avail, size=3)
+        hicann_id = np.random.choice(avail, size=4)
 
         hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
         for i in hicann_id:
@@ -78,6 +75,14 @@ def get_hicanns(center_hicann, n_kenyon):
         k_places.append(hicann)
         
     places['kenyon'] = k_places
+
+    for p in pops:
+        avail = np.setdiff1d(ids, used)
+        hicann_id = np.random.choice(avail, size=4)
+        hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
+        places[p] = hicann
+        for i in hicann_id:
+            used.append(i)
 
     # places = {
     # 'antenna': None,
@@ -180,19 +185,19 @@ e_rev = 92  # mV
 # e_rev = 500.0 #mV
 
 base_params = {
-    'cm': 0.01,  # nF
-    # 'cm': 0.2,  # nF
+    # 'cm': 0.1,  # nF
+    'cm': 0.1,  # nF
     'v_reset': -70.,  # mV
     'v_rest': -65.,  # mV
-    'v_thresh': -58.,  # mV
+    'v_thresh': -55.,  # mV
     # 'v_thresh': -50.,  # mV
     # 'e_rev_I': -e_rev, #mV
     # 'e_rev_E': 0.,#e_rev, #mV
     # 'tau_m': 10.,  # ms
     'tau_m': 10.,  # ms
     'tau_refrac': 10.,  # ms
-    'tau_syn_E': 10.0,  # ms
-    'tau_syn_I': 10.0,  # ms
+    'tau_syn_E': 1.0,  # ms
+    'tau_syn_I': 1.0,  # ms
 
 }
 
@@ -337,7 +342,7 @@ central_hicann = 76
 # central_hicann = 171
 # central_hicann = 283
 # central_hicann = 275
-hicanns = get_hicanns(central_hicann, div_kc)
+hicanns = get_hicanns(central_hicann, div_kc, seed=args.hicann_seed)
 # pprint(hicanns)
 nkc = int(np.ceil(args.nKC/float(div_kc)))
 print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
@@ -395,7 +400,7 @@ for i in range(div_kc):
     populations[kpop] = pynnx.Pop(nkc, neuron_class,
                             kenyon_parameters, label='Kenyon Cell %d'%i,
                             hicann=hicanns['kenyon'][i],
-                            gmax=2
+                            gmax=1023
                             )
     pynnx.set_recording(populations[kpop], 'spikes')
 
@@ -414,7 +419,7 @@ sys.stdout.write('Creating projections\n')
 sys.stdout.flush()
 
 static_w = {
-    'AL to KC': W2S * 1.0 * (100.0 / float(args.nAL)),
+    'AL to KC': W2S * 0.1 * (100.0 / float(args.nAL)),
     'KC to KC': W2S * (1.0 * (2500.0 / float(args.nKC))),
 
     'KC to DN': W2S * (0.01 * (2500.0 / float(args.nKC))),
@@ -485,13 +490,13 @@ projections = {
     'DN to IDN': pynnx.Proj(populations['decision'], populations['inh_decision'],
                            'AllToAllConnector', weights=static_w['EXC'], delays=timestep,
                            conn_params={'allow_self_connections': True}, target='excitatory', label='DN to IDN',
-                           digital_weights=15
+                        #    digital_weights=15
                            ),
 
     'IDN to DN': pynnx.Proj(populations['inh_decision'], populations['decision'],
                            'AllToAllConnector', weights=static_w['INH'], delays=timestep,
                            conn_params={'allow_self_connections': True}, target='inhibitory', label='IDN to DN',
-                           digital_weights=15
+                        #    digital_weights=15
                            ),
 
     ### make decision spike just before the next pattern to reduce weights corresponding to that input
@@ -527,7 +532,7 @@ for i in range(div_kc):
     projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
                                 'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
                                 conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
-                                digital_weights=8
+                                # digital_weights=1
                                 )
 
     kKC2DN = 'KC_%d to DN'%i
@@ -539,7 +544,7 @@ for i in range(div_kc):
                                 # conn_params={'p_connect': 0.1}, 
                                 label=kKC2DN,
                                 #stdp=stdp,
-                                digital_weights=1
+                                digital_weights=15
                                 )
 
     kKC2IKC = 'KC_%d to IKC'%i
@@ -633,10 +638,20 @@ for loop in np.arange(n_loops):
     bk_spikes = {k: bin_spikes_per_sample(0, weight_sample_dt, sample_dt, k_spikes[k]) \
                  for k in populations if k.lower().startswith('kenyon')}
     
+    for k in k_spikes:
+        ksum = 0
+        for times in k_spikes[k]:
+            ksum += len(times)
+        print("\n%s sum = %s"%(k, ksum))
+
     sys.stdout.write('\tDecision\n')
     sys.stdout.flush()
     out_spikes = pynnx.get_record(populations['decision'], 'spikes')
     bout_spikes = bin_spikes_per_sample(0, weight_sample_dt, sample_dt, out_spikes)
+    osum = 0
+    for times in out_spikes:
+        osum += len(times)
+    print("\n%s sum = %s"%('output', osum))
     
     ### ---------------------------------
     ### get highest spiking neurons, 
@@ -644,10 +659,7 @@ for loop in np.arange(n_loops):
                 for k in populations if k.lower().startswith('kenyon')}
     out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, noise_count_threshold)
     
-    print(k_high)
-    print(out_high)
     
-    print(pynnx._bss_blacklists)
     # Kenyon Cell %d
     # Decision 
     for k in bk_spikes:
@@ -658,7 +670,10 @@ for loop in np.arange(n_loops):
         pynnx_k = "Kenyon Cell %d"%int_idx
         print(k, int_idx, w_idx, pynnx_k)
         print(tmp_w[w_idx].shape)
+        print("BLACKLIST - Decision Neurons")
         print(pynnx._bss_blacklists["Decision Neurons"])
+        print("BLACKLIST - %s"%pynnx_k)
+        print(pynnx._bss_blacklists[pynnx_k])
         ws = structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
                 pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
     

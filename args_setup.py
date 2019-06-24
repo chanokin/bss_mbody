@@ -60,5 +60,7 @@ def get_args():
     parser.add_argument('--fixedNumLoops', type=int, default=1,
         help='How many weight recording loops to execute. If zero, 1% of nSamplesAL will be chosen')
 
+    parser.add_argument('--hicann_seed', type=int, default=2,
+        help='Random seed to generate placements for populations on BSS chips')
 
     return parser.parse_args()
