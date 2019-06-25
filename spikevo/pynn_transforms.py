@@ -479,24 +479,29 @@ class PyNNAL(object):
                         else source_pop
             
             __weight_matrix = np.ones((source_pop.size, dest_pop.size)) * np.nan
-            
+            # print(source_pop.size, dest_pop.size)
             if conn_text.startswith('From'):
                 tmp = conn_params.copy()
                 weights = np.array(conn_params['conn_list'])[:,2]
-                thr = (np.min(weights) + np.max(weights)) / 2.0
+                # print(len(weights))
+                if weights.size > 0:
+                    thr = (np.min(weights) + np.max(weights)) / 2.0
+                else:
+                    thr = 0
                 total = float(weights.size)
                 above = (weights > thr).sum()
-                print("In Proj above %s / total %s = %s"%\
-                    (above, total, above/total))
+                # print("In Proj above %s / total %s = %s"%\
+                #     (above, total, above/total))
                 delays = np.array(conn_params['conn_list'])[:,3]
                 for row, col, w, d in conn_params['conn_list']:
+                    row, col = int(row), int(col)
                     __weight_matrix[row, col] = w
                 
             else:
                 tmp = conn_params.copy()
                 tmp['weights'] = weights
                 tmp['delays'] = delays
-                
+            
             conn = conn_class(**tmp)
             
             if stdp is not None:
@@ -520,13 +525,22 @@ class PyNNAL(object):
                 w_max = stdp['weight_dependence']['params']['w_max']
             else:
                 syn_dyn = None
-                if isinstance(weights, np.ndarray) or \
-                    isinstance(weights, list):
-                    whr = np.where(np.abs(weights) > 0.0)
-                    w_min = np.min(np.abs(weights[whr]))
+                
+                if (isinstance(weights, np.ndarray) or isinstance(weights, list)):
+                    if len(weights) > 0:
+                        whr = np.where(np.abs(weights) > 0.0)
+                        w_min = np.min(np.abs(weights[whr]))
+                    else:
+                        w_min = 0
+                        w_max = 0
                 else:
                     w_min = np.min(np.abs(weights))
-                w_max = np.max(np.abs(weights))
+
+                try:
+                    w_max = np.max(np.abs(weights))
+                except:
+                    w_max = 0
+                
             
             proj = sim.Projection(pre_pop, dest_pop, conn,
                     target=target, synapse_dynamics=syn_dyn, label=label)

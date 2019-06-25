@@ -38,7 +38,7 @@ import pyhalbe.Coordinate as C
 # ])
 
 
-def get_hicanns(center_hicann, n_kenyon, seed=1):
+def get_hicanns(center_hicann, n_kenyon, seed=1, max_dist=3, n_per_pop=3):
     f = open("black_list_stats.txt", "a+")
     f.write(u"%s, -*-\n"%seed)
     f.close()
@@ -46,7 +46,7 @@ def get_hicanns(center_hicann, n_kenyon, seed=1):
     np.random.seed(seed)
     ID, ROW, COL = range(3)
     w = WAL()
-    hood = w.get_neighbours(center_hicann, max_dist=4)
+    hood = w.get_neighbours(center_hicann, max_dist=max_dist)
     ids = []
     for r in hood:
         for c in hood[r]:
@@ -67,7 +67,7 @@ def get_hicanns(center_hicann, n_kenyon, seed=1):
     for i in range(n_kenyon):
         avail = np.setdiff1d(ids, used)
         np.random.choice(avail, size=n_kenyon, replace=False)
-        hicann_id = np.random.choice(avail, size=4)
+        hicann_id = np.random.choice(avail, size=n_per_pop)
 
         hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
         for i in hicann_id:
@@ -78,7 +78,7 @@ def get_hicanns(center_hicann, n_kenyon, seed=1):
 
     for p in pops:
         avail = np.setdiff1d(ids, used)
-        hicann_id = np.random.choice(avail, size=4)
+        hicann_id = np.random.choice(avail, size=n_per_pop)
         hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
         places[p] = hicann
         for i in hicann_id:
@@ -102,6 +102,32 @@ def get_hicanns(center_hicann, n_kenyon, seed=1):
                 for q in p:
                     print(k, q.id())
     return places
+
+def all_to_all(pre_pop, post_pop, weights=1.0, delays=1.0):
+    return [[pre, post, weights, delays] 
+            for pre in range(pre_pop.size) for post in range(post_pop.size)]
+
+def input_connection_list(input_size, kenyon_size, prob_conn, weight, seed=111):
+    matrix = np.ones((input_size * kenyon_size, 4))
+    matrix[:, 0] = np.repeat(np.arange(input_size), kenyon_size)
+    matrix[:, 1] = np.tile(np.arange(kenyon_size), input_size)
+
+    np.random.seed(seed)
+
+    matrix[:, 2] = 0
+
+    dice = np.random.uniform(0., 1., size=(input_size * kenyon_size))
+    active = np.where(dice <= prob_conn)[0]
+    
+    matrix[active, 2] = weight
+    # print(matrix)
+    # print(dice.size, active.size, float(dice.size)/active.size)
+    # sys.exit(0)
+    np.random.seed()
+
+    conn_list = [[int(pre), int(post), w, d] for pre, post, w, d in matrix]
+    return conn_list
+    
 
 def gain_control_list(input_size, horn_size, max_w, cutoff=0.7):
     if cutoff is not None:
@@ -336,13 +362,13 @@ sys.stdout.flush()
 #######################################################################
 #######################################################################
 
-div_kc = 5
+div_kc = 6
 central_hicann = 76
 # central_hicann = 107
 # central_hicann = 171
 # central_hicann = 283
 # central_hicann = 275
-hicanns = get_hicanns(central_hicann, div_kc, seed=args.hicann_seed)
+hicanns = get_hicanns(central_hicann, div_kc, seed=2, max_dist=5, n_per_pop=5)
 # pprint(hicanns)
 nkc = int(np.ceil(args.nKC/float(div_kc)))
 print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
@@ -359,7 +385,7 @@ populations = {
     'decision': pynnx.Pop(args.nDN, neuron_class,
                           decision_parameters, label='Decision Neurons',
                           hicann=hicanns['decision'],
-                          gmax=2
+                          gmax=1023
                           ),
 
     'inh_decision': pynnx.Pop(1, neuron_class,
@@ -419,7 +445,7 @@ sys.stdout.write('Creating projections\n')
 sys.stdout.flush()
 
 static_w = {
-    'AL to KC': W2S * 0.1 * (100.0 / float(args.nAL)),
+    'AL to KC': W2S * 1.0 * (100.0 / float(args.nAL)),
     'KC to KC': W2S * (1.0 * (2500.0 / float(args.nKC))),
 
     'KC to DN': W2S * (0.01 * (2500.0 / float(args.nKC))),
@@ -451,6 +477,8 @@ w_min = 0.0
 print("\nw_min = {}\tw_max = {}\n".format(w_min, w_max))
 
 gain_list = []
+in_lists = [input_connection_list(args.nAL, nkc, args.probAL2KC, rand_w['AL to KC']) \
+                for _ in range(div_kc)]
 
 out_lists = [output_connection_list(nkc, args.nDN, args.probKC2DN,
                                    static_w['KC to DN'],
@@ -488,15 +516,23 @@ stdp = {
 projections = {
      ### Inhibitory feedback --- decision neurons
     'DN to IDN': pynnx.Proj(populations['decision'], populations['inh_decision'],
-                           'AllToAllConnector', weights=static_w['EXC'], delays=timestep,
-                           conn_params={'allow_self_connections': True}, target='excitatory', label='DN to IDN',
-                        #    digital_weights=15
+                           'FromListConnector', weights=None, delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(
+                                    populations['decision'], populations['inh_decision'],
+                                    weights=static_w['EXC'], delays=timestep)}, 
+                            target='excitatory', label='DN to IDN',
+                            digital_weights=15
                            ),
 
     'IDN to DN': pynnx.Proj(populations['inh_decision'], populations['decision'],
-                           'AllToAllConnector', weights=static_w['INH'], delays=timestep,
-                           conn_params={'allow_self_connections': True}, target='inhibitory', label='IDN to DN',
-                        #    digital_weights=15
+                           'FromListConnector', weights=None, delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(
+                                    populations['inh_decision'], populations['decision'],
+                                    weights=static_w['INH'], delays=timestep)}, 
+                            target='inhibitory', label='IDN to DN',
+                            digital_weights=15
                            ),
 
     ### make decision spike just before the next pattern to reduce weights corresponding to that input
@@ -529,10 +565,16 @@ projections = {
 for i in range(div_kc):
     kAL2KC = 'AL to KC_%d'%i
     kpop = 'kenyon_%d'%i
+    # projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
+    #                             'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
+    #                             conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
+    #                             # digital_weights=1
+    #                             )
+
     projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
-                                'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
-                                conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
-                                # digital_weights=1
+                                'FromListConnector', weights=None, delays=None,
+                                conn_params={'conn_list': in_lists[i]}, label=kAL2KC,
+                                digital_weights=6,
                                 )
 
     kKC2DN = 'KC_%d to DN'%i
@@ -544,22 +586,29 @@ for i in range(div_kc):
                                 # conn_params={'p_connect': 0.1}, 
                                 label=kKC2DN,
                                 #stdp=stdp,
-                                digital_weights=15
+                                digital_weights=4,
                                 )
 
     kKC2IKC = 'KC_%d to IKC'%i
     projections[kKC2IKC] = pynnx.Proj(populations[kpop], populations['inh_kenyon'],
-                            'AllToAllConnector', weights=static_w['EXC'], 
-                            delays=timestep,
-                            conn_params={'allow_self_connections': True}, 
-                            target='excitatory', label=kKC2IKC)
+                            'FromListConnector', weights=None, delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(populations[kpop], populations['inh_kenyon'],
+                                           weights=static_w['EXC'], delays=timestep)}, 
+                            target='excitatory', label=kKC2IKC,
+                            digital_weights=15,
+                            )
                             
     kIKC2KC = 'IKC to KC_%d'%i
     projections[kIKC2KC] = pynnx.Proj(populations['inh_kenyon'], populations[kpop],
-                            'AllToAllConnector', weights=static_w['INH'], 
-                            delays=timestep,
-                            conn_params={'allow_self_connections': True}, 
-                            target='inhibitory', label=kIKC2KC)
+                            'FromListConnector', weights=None, 
+                            delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(populations['inh_kenyon'], populations[kpop],
+                                           weights=static_w['INH'], delays=timestep)}, 
+                            target='inhibitory', label=kIKC2KC,
+                            digital_weights=15,
+                            )
 
 
 sys.stdout.write('Running simulation\n')

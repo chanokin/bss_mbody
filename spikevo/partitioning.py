@@ -83,6 +83,7 @@ class SplitArrayPopulation(SplitPop):
                     'ids': ids,
                     'pop': self.pynnal.Pop(size, self.cell_class, params, label=label),
                     'label': label,
+                    'n_divs': self.n_sub_pops,
                 })
 
         ### TODO: deal with 2D, 3D!
@@ -156,6 +157,7 @@ class SplitPopulation(SplitPop):
                     'ids': ids,
                     'pop': self.pynnal.Pop(size, self.cell_class, self.params, label),
                     'label': label,
+                    'n_divs': self.n_sub_pops,
                 })
                 if i > 0:
                     self.pynnal._graph.link_subpop(pops[i - 1]['label'], pops[i]['label'])
@@ -191,8 +193,15 @@ class SplitProjection(object):
         self.destination = dest_pop
         self.conn_class = conn_class
         self.weights = weights
-        self.w_min = np.min(np.abs(weights))
-        self.w_max = np.max(np.abs(weights))
+        
+        if weights is None:
+            ws = np.array(conn_params['conn_list'])[:,2]
+            self.w_min = np.min(np.abs(ws))
+            self.w_max = np.max(np.abs(ws))
+        else:
+            self.w_min = np.min(np.abs(weights))
+            self.w_max = np.max(np.abs(weights))
+
         self.delays = delays
         self.target = target
         self.stdp = stdp
@@ -216,12 +225,21 @@ class SplitProjection(object):
         if isinstance(src, SplitPopulation) or isinstance(src, SplitArrayPopulation):
             pres = src._populations
         else:
-            pres = [{'ids': np.arange(src.size), 'pop': src, 'label': src.label}]
+            pres = [{
+                'ids': np.arange(src.size), 'pop': src, 
+                'label': src.label, 'n_divs': 1,
+            }]
 
         if isinstance(dst, SplitPopulation) or isinstance(dst, SplitArrayPopulation):
             posts = dst._populations
         else:
-            posts = [{'ids': np.arange(dst.size), 'pop': dst, 'label': dst.label}]
+            posts = [{
+                'ids': np.arange(dst.size), 'pop': dst, 
+                'label': dst.label, 'n_divs': 1,
+            }]
+
+        # print(pres)
+        # print(posts)
 
         projs = {}
         for src_part in pres:
@@ -312,12 +330,24 @@ class SplitProjection(object):
         if isinstance(clist, list):
             clist = np.array(clist)
 
-        whr = np.where(np.intersect1d(
-            np.intersect1d(clist[:, 0], pre['ids'])[0],
-            np.intersect1d(clist[:, 1], post['ids'])[0]))[0]
-        cp = {'conn_list': clist[whr, :]}
+        pres = np.empty(0)
+        for p in pre['ids']:
+            pres = np.append(pres, np.where(np.equal(clist[:, 0], p)))
 
-        return pynnal.Proj(pre['pop'], post['pop'], conn, w[whr], d[whr],
+        posts = np.empty(0)
+        for p in post['ids']:
+            posts = np.append(posts, np.where(np.equal(clist[:, 1], p)))
+        
+        whr = np.intersect1d(pres, posts)
+        whr = whr.astype('int')
+        _clist = []
+        for _pre, _post, w, d in clist[whr, :]:
+            _clist.append( [int(_pre)//pre['n_divs'], int(_post)//post['n_divs'], 
+                            float(w), float(d)] )
+
+        cp = {'conn_list': _clist}
+
+        return pynnal.Proj(pre['pop'], post['pop'], conn, None, None,
                            target=tgt, stdp=stdp, label=lbl, conn_params=cp,
                            digital_weights=self.digital_weights)
 
