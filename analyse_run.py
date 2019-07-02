@@ -43,7 +43,7 @@ def bin_spikes_per_sample(start_t, end_t, sample_dt, spikes):
 
 
 DEFAULT_SP_CONFIG = dict(
-    up_w=0.1, down_w=0.1, max_w=np.inf, rand_add_prob=0.3, rand_del_prob=0.3,
+    up_w=0.1, down_w=0.1, max_w=np.inf, rand_add_prob=0.1, rand_del_prob=0.1,
 )
 def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights, 
                           pre_blacklist, post_blacklist, config=DEFAULT_SP_CONFIG):
@@ -63,28 +63,53 @@ def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights,
                 max_post_t = -np.inf if post_ts.size == 0 else post_ts.max()
                 # should we randomize these actions?
                 if pre_ts.size > 0: # pre spiked for this pattern
-                    if post_ts.size > 0 and max_pre_t < max_post_t: # and post spiked as well after
+                    if post_ts.size > 0:# and max_pre_t < max_post_t: # and post spiked as well after
                         ws[pre, post] += up_w # increase synapse
                     elif np.random.uniform(0., 1.) <= rand_add_prob: # post didn't spike but randomly increase synapses
                         ws[pre, post] += up_w
-                    else: # and if post didn't spike, not sensitive to pattern
-                        ws[pre, post] -= down_w # decrease synapse
+                    # else: # and if post didn't spike, not sensitive to pattern
+                    #     ws[pre, post] -= down_w # decrease synapse
 
                 elif post_ts.size > 0: # pre didn't spike but post did
                         ws[pre, post] -= down_w # pre is not part of the pattern, decrease synapse
-                elif np.random.uniform(0., 1.) <= rand_del_prob: # we have no pairs, randomly reduce synapse
-                        ws[pre, post] -= down_w
+                # elif np.random.uniform(0., 1.) <= rand_del_prob: # we have no pairs, randomly reduce synapse
+                #         ws[pre, post] = 0
 
 
-    #keep noisy neurons at bay ... hopefully
-    for pre in pre_blacklist: 
-        pre = int(pre)
-        ws[pre, :] = 0
+    # #keep noisy neurons at bay ... hopefully
+    # for pre in pre_blacklist: 
+    #     pre = int(pre)
+    #     ws[pre, :] = 0
 
-    for post in post_blacklist:
-        post = int(post)
-        ws[:, post] = 0
+    # for post in post_blacklist:
+    #     post = int(post)
+    #     ws[:, post] = 0
 
-    ws[:] = np.clip(0.0, max_w, ws) ### keep weights positive
+    ws[:] = np.clip(ws, 0.0, max_w) ### keep weights positive
 
     return ws
+
+
+PRE, POST = range(2)
+def reduce_influence(high_spiking_ids, projection, pre_or_post=PRE, n_to_delete=1):
+    _ws = projection._PyNNAL__weight_matrix.copy()
+
+    # if it's a pre-syn population, we want to remove influence immediately
+    if pre_or_post == PRE:
+        _ws[high_spiking_ids, :] = 0
+    else:
+        for hsi in high_spiking_ids:
+            n_del = n_to_delete
+            on = np.where(_ws[:, hsi] > 0)[0]
+            if len(on) == 0: 
+                continue
+            while len(on) < n_del:
+                n_del -= 1
+            to_del = np.random.choice(on, size=n_del, replace=False)
+            _ws[to_del, hsi] = 0
+    
+    projection._PyNNAL__weight_matrix[:] = _ws
+
+    return _ws
+
+

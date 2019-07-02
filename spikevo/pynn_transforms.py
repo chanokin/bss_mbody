@@ -31,13 +31,13 @@ try:
     import pysthal
     
     init_logger("WARN", [
-        ("guidebook", "INFO"),
+        # ("guidebook", "INFO"),
         ("marocco", "INFO"),
-        ("Calibtic", "INFO"),
+        # ("Calibtic", "INFO"),
         # ("guidebook", "DEBUG"),
         # ("marocco", "DEBUG"),
         # ("Calibtic", "DEBUG"),
-        ("sthal", "INFO")
+        # ("sthal", "INFO")
     ])
 
 except:

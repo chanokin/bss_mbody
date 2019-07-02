@@ -362,13 +362,13 @@ sys.stdout.flush()
 #######################################################################
 #######################################################################
 
-div_kc = 6
+div_kc = 5
 central_hicann = 76
 # central_hicann = 107
 # central_hicann = 171
 # central_hicann = 283
 # central_hicann = 275
-hicanns = get_hicanns(central_hicann, div_kc, seed=2, max_dist=5, n_per_pop=5)
+hicanns = get_hicanns(central_hicann, div_kc, seed=args.hicann_seed, max_dist=5, n_per_pop=5)
 # pprint(hicanns)
 nkc = int(np.ceil(args.nKC/float(div_kc)))
 print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
@@ -431,6 +431,8 @@ for i in range(div_kc):
     pynnx.set_recording(populations[kpop], 'spikes')
 
 pynnx.set_recording(populations['decision'], 'spikes')
+pynnx.set_recording(populations['inh_decision'], 'spikes')
+pynnx.set_recording(populations['inh_kenyon'], 'spikes')
 np.random.seed()
 # populations['decision'].initialize(v=np.random.uniform(-120.0, -50.0, size=args.nDN))
 
@@ -585,7 +587,7 @@ for i in range(div_kc):
                                 # conn_class='FixedProbabilityConnector', 
                                 # conn_params={'p_connect': 0.1}, 
                                 label=kKC2DN,
-                                #stdp=stdp,
+                                # stdp=stdp,
                                 digital_weights=4,
                                 )
 
@@ -634,15 +636,24 @@ else:
     n_loops = fixed_loops
     weight_sample_dt = np.ceil(sim_time / float(n_loops))
 
+total_t = sample_dt * args.nSamplesAL * args.nPatternsAL
+weight_sample_dt = total_t
+noise_count_threshold = args.nSamplesAL * args.nPatternsAL * 0.5
+n_loops = 10
+
 print("num loops = {}\ttime per loop {}".format(n_loops, weight_sample_dt))
 now = datetime.datetime.now()
-sys.stdout.write("\tstarting time is {:02d}:{:02d}:{:02d}\n".format(now.hour, now.minute, now.second))
+sys.stdout.write(
+    "\tstarting time is {:02d}:{:02d}:{:02d}\n".format(now.hour, now.minute, now.second))
 sys.stdout.flush()
-
-noise_count_threshold = 10
+k_spikes = []
+ik_spikes = []
+out_spikes = []
+iout_spikes = []
 tmp_w = {}
 t0 = time.time()
 for loop in np.arange(n_loops):
+    
     sys.stdout.write("\trunning loop {} of {}\t".format(loop + 1, n_loops))
     sys.stdout.flush()
 
@@ -653,7 +664,11 @@ for loop in np.arange(n_loops):
 
     ### ---------------------------------
     ### run experiment 
-    pynnx.run(weight_sample_dt)
+    pynnx.run(weight_sample_dt) 
+
+    f = open('it_ran_log.txt', 'a+')
+    f.write(u'%s\n'%(args.hicann_seed))
+    f.close()
 
     secs_to_run = time.time() - loop_t0
     mins_to_run = secs_to_run // 60
@@ -682,32 +697,44 @@ for loop in np.arange(n_loops):
 
     sys.stdout.write('\tKenyon\n')
     sys.stdout.flush()
-    k_spikes = {k: pynnx.get_record(populations[k], 'spikes') \
+    _k_spikes = {k: pynnx.get_record(populations[k], 'spikes') \
                 for k in populations if k.lower().startswith('kenyon')}
-    bk_spikes = {k: bin_spikes_per_sample(0, weight_sample_dt, sample_dt, k_spikes[k]) \
+    bk_spikes = {k: bin_spikes_per_sample(0, weight_sample_dt, sample_dt, _k_spikes[k]) \
                  for k in populations if k.lower().startswith('kenyon')}
     
-    for k in k_spikes:
+    for k in _k_spikes:
         ksum = 0
-        for times in k_spikes[k]:
+        for times in _k_spikes[k]:
             ksum += len(times)
         print("\n%s sum = %s"%(k, ksum))
 
     sys.stdout.write('\tDecision\n')
     sys.stdout.flush()
-    out_spikes = pynnx.get_record(populations['decision'], 'spikes')
-    bout_spikes = bin_spikes_per_sample(0, weight_sample_dt, sample_dt, out_spikes)
+    _out_spikes = pynnx.get_record(populations['decision'], 'spikes')
+    bout_spikes = bin_spikes_per_sample(0, weight_sample_dt, sample_dt, _out_spikes)
     osum = 0
-    for times in out_spikes:
+    for times in _out_spikes:
         osum += len(times)
     print("\n%s sum = %s"%('output', osum))
-    
+
+
+    _ik_spikes = pynnx.get_record(populations['inh_kenyon'], 'spikes')
+    _io_spikes = pynnx.get_record(populations['inh_decision'], 'spikes')
+
+
+
     ### ---------------------------------
     ### get highest spiking neurons, 
-    k_high = {k: get_high_spiking(k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
-                for k in populations if k.lower().startswith('kenyon')}
-    out_high = get_high_spiking(out_spikes, 0, weight_sample_dt, noise_count_threshold)
+    k_high = {\
+        k: get_high_spiking(_k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
+                  for k in _k_spikes if k.lower().startswith('kenyon')}
+    out_high = get_high_spiking(_out_spikes, 0, weight_sample_dt, noise_count_threshold)
     
+    ### Update blacklists
+    ### reduce in-K weights
+    ### reduce K-iK weights
+    ### reduce K-D weights
+    ### reduce D-iD weights
     
     # Kenyon Cell %d
     # Decision 
@@ -725,7 +752,12 @@ for loop in np.arange(n_loops):
         print(pynnx._bss_blacklists[pynnx_k])
         ws = structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
                 pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
-    
+        projections[w_idx]._PyNNAL__weight_matrix[:] = ws
+
+    k_spikes.append(_k_spikes)
+    ik_spikes.append(_ik_spikes)
+    out_spikes.append(_out_spikes)
+    iout_spikes.append(_io_spikes)
 
 post_horn = []
 secs_to_run = time.time() - t0
@@ -811,6 +843,7 @@ np.savez_compressed(fname, args=args, sim_time=sim_time,
                     output_end_weights=final_weights, 
                     static_weights=static_w, stdp_params=stdp,
                     kenyon_spikes=k_spikes, decision_spikes=out_spikes, 
+                    inh_kenyon_spikes=ik_spikes, inh_decision_spikes=iout_spikes, 
                     horn_spikes=horn_spikes,
                     neuron_parameters=neuron_params,
                     sample_dt=sample_dt, start_dt=start_dt, max_rand_dt=max_rand_dt,
