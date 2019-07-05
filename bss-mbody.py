@@ -639,7 +639,7 @@ else:
 total_t = sample_dt * args.nSamplesAL * args.nPatternsAL
 weight_sample_dt = total_t
 noise_count_threshold = args.nSamplesAL * args.nPatternsAL * 0.5
-n_loops = 10
+n_loops = 5
 
 print("num loops = {}\ttime per loop {}".format(n_loops, weight_sample_dt))
 now = datetime.datetime.now()
