@@ -38,69 +38,79 @@ import pyhalbe.Coordinate as C
 # ])
 
 
-def get_hicanns(center_hicann, n_kenyon, seed=1, max_dist=3, n_per_pop=3):
-    f = open("black_list_stats.txt", "a+")
-    f.write(u"%s, -*-\n"%seed)
-    f.close()
 
-    np.random.seed(seed)
-    ID, ROW, COL = range(3)
-    w = WAL()
-    hood = w.get_neighbours(center_hicann, max_dist=max_dist)
-    ids = []
-    for r in hood:
-        for c in hood[r]:
-            ids.append(hood[r][c][ID])
+def get_hicanns(center_hicann, n_kenyon, seed=1, max_dist=3, n_per_pop=4, manual=False):
+    if manual:
+        f = open("black_list_stats.txt", "a+")
+        f.write(u"%s, -*-\n"%seed)
+        f.close()
 
-    pprint(hood)
-    
-    pops = ['antenna', 'decision', 
-            'feedback', 'exciter',
-            # 'tick', 'exciter_src',
-            # 'kenyon',
-            ]
-    ### ideal config is in a 3x3 grid
-    places = {}
-    used = []
-            
-    k_places = []
-    for i in range(n_kenyon):
-        avail = np.setdiff1d(ids, used)
-        np.random.choice(avail, size=n_kenyon, replace=False)
-        hicann_id = np.random.choice(avail, size=n_per_pop)
+        np.random.seed(seed)
+        ID, ROW, COL = range(3)
+        w = WAL()
+        hood = w.get_neighbours(center_hicann, max_dist=max_dist)
+        ids = []
+        for r in hood:
+            for c in hood[r]:
+                ids.append(hood[r][c][ID])
 
-        hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
-        for i in hicann_id:
-            used.append(i)
-        k_places.append(hicann)
+        pprint(hood)
+        print(ids)
         
-    places['kenyon'] = k_places
+        pops = ['antenna', 'decision', 
+                'feedback', 'exciter',
+                # 'tick', 'exciter_src',
+                # 'kenyon',
+                ]
+        ### ideal config is in a 3x3 grid
+        places = {}
+        blacklist = []
+        # ## blacklist = [73, 76, 99, 17, 18, 19, 20, 21, 37, 47, 167, 56, 6, 5, 7, 80, 100, 14]
+        used = [] + blacklist
+                
+        k_places = []
+        for i in range(n_kenyon):
+            avail = np.setdiff1d(ids, used)
+            np.random.choice(avail, size=n_kenyon, replace=False)
+            hicann_id = np.random.choice(avail, size=n_per_pop)
 
-    for p in pops:
-        avail = np.setdiff1d(ids, used)
-        hicann_id = np.random.choice(avail, size=n_per_pop)
-        hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
-        places[p] = hicann
-        for i in hicann_id:
-            used.append(i)
+            hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
+            for i in hicann_id:
+                used.append(i)
+            k_places.append(hicann)
+            
+        places['kenyon'] = k_places
 
-    # places = {
-    # 'antenna': None,
-    # 'kenyon': [None] * n_kenyon,
-    # 'decision': None,
-    # 'tick': None,
-    # 'feedback': None,
-    # 'exciter src': None,
-    # 'exciter': None,
-    # }
+        for p in pops:
+            avail = np.setdiff1d(ids, used)
+            hicann_id = np.random.choice(avail, size=n_per_pop)
+            hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
+            places[p] = hicann
+            for i in hicann_id:
+                used.append(i)
+
+
+        
+        for k in sorted(places):
+            for p in places[k]:
+                try:
+                    sys.stdout.write("{},".format(int(p.id())))
+                except:
+                    for q in p:
+                        sys.stdout.write("{},".format(int(q.id())))
+        print()
+        print(places)
+    else:
+        places = {
+            'antenna': None,
+            'kenyon': [None] * n_kenyon,
+            'decision': None,
+            'tick': None,
+            'feedback': None,
+            'exciter src': None,
+            'exciter': None,
+        }
     
-    for k in sorted(places):
-        for p in places[k]:
-            try:
-                print(k, p.id())
-            except:
-                for q in p:
-                    print(k, q.id())
     return places
 
 def all_to_all(pre_pop, post_pop, weights=1.0, delays=1.0):
@@ -215,7 +225,7 @@ base_params = {
     'cm': 0.1,  # nF
     'v_reset': -70.,  # mV
     'v_rest': -65.,  # mV
-    'v_thresh': -55.,  # mV
+    'v_thresh': -50.,  # mV
     # 'v_thresh': -50.,  # mV
     # 'e_rev_I': -e_rev, #mV
     # 'e_rev_E': 0.,#e_rev, #mV
@@ -228,8 +238,8 @@ base_params = {
 }
 
 base_params['e_rev_I'] = -e_rev
-# base_params['e_rev_E'] = e_rev
-base_params['e_rev_E'] = 0.0
+base_params['e_rev_E'] = e_rev
+# base_params['e_rev_E'] = 0.0
 
 
 kenyon_parameters = base_params.copy()
@@ -274,7 +284,7 @@ neuron_params = {
 W2S = 1.0
 
 # sample_dt, start_dt, max_rand_dt = 10, 5, 2
-sample_dt, start_dt, max_rand_dt = 50, 5, 5.0
+sample_dt, start_dt, max_rand_dt = 50, 5, 0.
 sim_time = sample_dt * args.nSamplesAL * args.nPatternsAL
 timestep = 0.1
 regenerate = args.regenerateSamples
@@ -282,7 +292,8 @@ record_all = args.recordAllOutputs and args.nSamplesAL <= 50
 fixed_loops = args.fixedNumLoops
 n_explore_samples = min(args.nPatternsAL * 10, np.round(args.nSamplesAL * args.nPatternsAL * 0.01))
 n_exciter_samples = min(args.nPatternsAL * 100, np.round(args.nSamplesAL * args.nPatternsAL * 0.1))
-n_test_samples = min(1000, np.round(args.nSamplesAL * args.nPatternsAL * 1.0/6.0))
+n_test = np.round(args.nSamplesAL * 1.0/10.0)
+n_test_samples = min(1000, n_test * args.nPatternsAL)
 use_poisson_input = bool(0)
 high_dt = 3
 low_freq, high_freq = 10, 100
@@ -303,7 +314,7 @@ sys.stdout.flush()
 sys.stdout.write('\tGenerating samples\n')
 sys.stdout.flush()
 
-samples = generate_samples(input_vecs, args.nSamplesAL, args.probNoiseSamplesAL, seed=234,
+samples = generate_samples(input_vecs, args.nSamplesAL, n_test, args.probNoiseSamplesAL, seed=234,
                            # method='random',
                            method='exact',
                            regenerate=regenerate)
@@ -320,9 +331,10 @@ if use_poisson_input:
                                     sample_dt, start_dt, high_dt, high_freq, low_freq,
                                     seed=234, randomize_samples=True, regenerate=bool(0))
 else:
-    sample_indices, spike_times = samples_to_spike_times(samples, sample_dt, start_dt, max_rand_dt, timestep,
-                                                         randomize_samples=args.randomizeSamplesAL, seed=345,
-                                                         regenerate=regenerate)
+    sample_indices, spike_times = samples_to_spike_times(samples, args.nSamplesAL, n_test,
+                                    sample_dt, start_dt, max_rand_dt, timestep,
+                                    randomize_samples=args.randomizeSamplesAL, seed=345,
+                                    regenerate=regenerate)
 
 
 
@@ -350,7 +362,7 @@ sys.stdout.flush()
 
 pynnx = PyNNAL(backend)
 pynnx.setup(timestep=timestep, min_delay=timestep, 
-            per_sim_params={'wafer': 30})
+            per_sim_params={'wafer': args.wafer})
 
 sys.stdout.write('Done!\tCreating simulator abstraction\n\n')
 sys.stdout.flush()
@@ -363,12 +375,15 @@ sys.stdout.flush()
 #######################################################################
 
 div_kc = 5
+div_kc = 10
+# div_kc = 15
 central_hicann = 76
 # central_hicann = 107
 # central_hicann = 171
 # central_hicann = 283
 # central_hicann = 275
-hicanns = get_hicanns(central_hicann, div_kc, seed=args.hicann_seed, max_dist=5, n_per_pop=5)
+hicanns = get_hicanns(central_hicann, div_kc, seed=args.hicann_seed, 
+            max_dist=5, n_per_pop=5, manual=bool(0))
 # pprint(hicanns)
 nkc = int(np.ceil(args.nKC/float(div_kc)))
 print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
@@ -421,8 +436,9 @@ populations = {
 
 }
 
+i2t = lambda x: "%02d"%x
 for i in range(div_kc):
-    kpop = 'kenyon_%d'%i
+    kpop = 'kenyon_%s'%(i2t(i))
     populations[kpop] = pynnx.Pop(nkc, neuron_class,
                             kenyon_parameters, label='Kenyon Cell %d'%i,
                             hicann=hicanns['kenyon'][i],
@@ -477,6 +493,8 @@ w_max = (static_w['KC to DN'] * 1.0) * 1.2
 # w_min = -5. * w_max
 w_min = 0.0
 print("\nw_min = {}\tw_max = {}\n".format(w_min, w_max))
+print("args.probAL2KC = {}".format(args.probAL2KC))
+print("args.probKC2DN = {}".format(args.probKC2DN))
 
 gain_list = []
 in_lists = [input_connection_list(args.nAL, nkc, args.probAL2KC, rand_w['AL to KC']) \
@@ -565,8 +583,8 @@ projections = {
 
 }
 for i in range(div_kc):
-    kAL2KC = 'AL to KC_%d'%i
-    kpop = 'kenyon_%d'%i
+    kAL2KC = 'AL to KC_%s'%(i2t(i))
+    kpop = 'kenyon_%s'%(i2t(i))
     # projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
     #                             'FixedProbabilityConnector', weights=rand_w['AL to KC'], delays=4.0,
     #                             conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
@@ -576,10 +594,11 @@ for i in range(div_kc):
     projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
                                 'FromListConnector', weights=None, delays=None,
                                 conn_params={'conn_list': in_lists[i]}, label=kAL2KC,
-                                digital_weights=6,
+                                digital_weights=10,
+                                target='excitatory',
                                 )
 
-    kKC2DN = 'KC_%d to DN'%i
+    kKC2DN = 'KC_%s to DN'%(i2t(i))
     projections[kKC2DN] = pynnx.Proj(populations[kpop], populations['decision'],
                                 weights=None, delays=None,
                                 conn_class='FromListConnector', 
@@ -589,28 +608,29 @@ for i in range(div_kc):
                                 label=kKC2DN,
                                 # stdp=stdp,
                                 digital_weights=4,
+                                target='excitatory',
                                 )
 
-    kKC2IKC = 'KC_%d to IKC'%i
-    projections[kKC2IKC] = pynnx.Proj(populations[kpop], populations['inh_kenyon'],
-                            'FromListConnector', weights=None, delays=None,
-                            conn_params={'conn_list': 
-                                all_to_all(populations[kpop], populations['inh_kenyon'],
-                                           weights=static_w['EXC'], delays=timestep)}, 
-                            target='excitatory', label=kKC2IKC,
-                            digital_weights=15,
-                            )
+    # kKC2IKC = 'KC_%s to IKC'%(i2t(i))
+    # projections[kKC2IKC] = pynnx.Proj(populations[kpop], populations['inh_kenyon'],
+                            # 'FromListConnector', weights=None, delays=None,
+                            # conn_params={'conn_list': 
+                                # all_to_all(populations[kpop], populations['inh_kenyon'],
+                                           # weights=static_w['EXC'], delays=timestep)}, 
+                            # target='excitatory', label=kKC2IKC,
+                            # digital_weights=15,
+                            # )
                             
-    kIKC2KC = 'IKC to KC_%d'%i
-    projections[kIKC2KC] = pynnx.Proj(populations['inh_kenyon'], populations[kpop],
-                            'FromListConnector', weights=None, 
-                            delays=None,
-                            conn_params={'conn_list': 
-                                all_to_all(populations['inh_kenyon'], populations[kpop],
-                                           weights=static_w['INH'], delays=timestep)}, 
-                            target='inhibitory', label=kIKC2KC,
-                            digital_weights=15,
-                            )
+    # kIKC2KC = 'IKC to KC_%s'%(i2t(i))
+    # projections[kIKC2KC] = pynnx.Proj(populations['inh_kenyon'], populations[kpop],
+                            # 'FromListConnector', weights=None, 
+                            # delays=None,
+                            # conn_params={'conn_list': 
+                                # all_to_all(populations['inh_kenyon'], populations[kpop],
+                                           # weights=static_w['INH'], delays=timestep)}, 
+                            # target='inhibitory', label=kIKC2KC,
+                            # digital_weights=15,
+                            # )
 
 
 sys.stdout.write('Running simulation\n')
@@ -638,8 +658,10 @@ else:
 
 total_t = sample_dt * args.nSamplesAL * args.nPatternsAL
 weight_sample_dt = total_t
-noise_count_threshold = args.nSamplesAL * args.nPatternsAL * 0.5
-n_loops = 5
+noise_count_threshold = args.nSamplesAL * 5.0
+noise_count_threshold_out = args.nSamplesAL * 0.8
+n_loops = 100
+base_train_loops = 10
 
 print("num loops = {}\ttime per loop {}".format(n_loops, weight_sample_dt))
 now = datetime.datetime.now()
@@ -654,12 +676,12 @@ tmp_w = {}
 t0 = time.time()
 for loop in np.arange(n_loops):
     
-    sys.stdout.write("\trunning loop {} of {}\t".format(loop + 1, n_loops))
+    sys.stdout.write("\n\n\trunning loop {} of {}\t".format(loop + 1, n_loops))
     sys.stdout.flush()
 
     loop_t0 = time.time()
     now = datetime.datetime.now()
-    sys.stdout.write("starting {:02d}:{:02d}:{:02d}\t".format(now.hour, now.minute, now.second))
+    sys.stdout.write("starting {:02d}:{:02d}:{:02d}\n\n".format(now.hour, now.minute, now.second))
     sys.stdout.flush()
 
     ### ---------------------------------
@@ -685,14 +707,27 @@ for loop in np.arange(n_loops):
     tmp_w.clear()
     for k in sorted(projections.keys()):
         if k.startswith('KC') and k.endswith('to DN'):
-            tmp_w[k] = pynnx.get_weights(projections[k])
+            # tmp_w[k] = pynnx.get_weights(projections[k])
+            tmp_w[k] = projections[k]._PyNNAL__weight_matrix.copy()
+
+        if k.startswith('AL') and 'KC' in k:
+            n_pre, n_post = projections[k].n_pre, projections[k].n_post
+            arr = np.zeros((n_pre, n_post))
+            for pre_label in projections[k]._projections:
+                for post_label in projections[k]._projections[pre_label]:
+                    proj = projections[k]._projections[pre_label][post_label]['proj']
+                    pres = projections[k]._projections[pre_label][post_label]['ids']['pre']
+                    
+                    arr[pres, :] = proj._PyNNAL__weight_matrix
+            tmp_w[k] = arr
+            
     
     # print(loop, tmp_w.shape)
-    weights.append(tmp_w)
+    weights.append(tmp_w.copy())
     
     ### ---------------------------------
     ### grab spikes to do further learning (blacklist and structural plasticity)
-    sys.stdout.write('Getting spikes:\n')
+    sys.stdout.write('\n\n\nGetting spikes:\n')
     sys.stdout.flush()
 
     sys.stdout.write('\tKenyon\n')
@@ -728,36 +763,80 @@ for loop in np.arange(n_loops):
     k_high = {\
         k: get_high_spiking(_k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
                   for k in _k_spikes if k.lower().startswith('kenyon')}
-    out_high = get_high_spiking(_out_spikes, 0, weight_sample_dt, noise_count_threshold)
+    out_high = get_high_spiking(_out_spikes, 0, weight_sample_dt, noise_count_threshold_out)
     
     ### Update blacklists
     ### reduce in-K weights
+    for k in sorted(k_high.keys()):
+        print(k)
+        int_idx = int(k.split("_")[-1])
+        print(int_idx)
+        w_idx = "AL to KC_%s"%(i2t(int_idx))
+        pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
+        print(k, int_idx, w_idx, pynnx_k)
+        print(k_high[k].keys())
+        # if loop < base_train_loops:
+        if loop < 2:
+            projections[w_idx].updateWeightMatrix(
+                reduce_influence(k_high[k], projections[w_idx], POST, n_to_delete=1))
+
     ### reduce K-iK weights
-    ### reduce K-D weights
     ### reduce D-iD weights
     
     # Kenyon Cell %d
     # Decision 
-    for k in bk_spikes:
+    for k in sorted(bk_spikes.keys()):
         print(k)
         int_idx = int(k.split("_")[-1])
         print(int_idx)
-        w_idx = "KC_%d to DN"%(int_idx)
-        pynnx_k = "Kenyon Cell %d"%int_idx
+        w_idx = "KC_%s to DN"%(i2t(int_idx))
+        pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
         print(k, int_idx, w_idx, pynnx_k)
         print(tmp_w[w_idx].shape)
-        print("BLACKLIST - Decision Neurons")
-        print(pynnx._bss_blacklists["Decision Neurons"])
-        print("BLACKLIST - %s"%pynnx_k)
-        print(pynnx._bss_blacklists[pynnx_k])
-        ws = structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
-                pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
-        projections[w_idx]._PyNNAL__weight_matrix[:] = ws
+        print("Decision Neurons")
+        # print(pynnx._bss_blacklists["Decision Neurons"])
+        print(out_high.keys())
+        # print("BLACKLIST - %s"%pynnx_k)
+        # print(pynnx._bss_blacklists[pynnx_k])
+                ### reduce K-D weights
+        
+        # projections[w_idx]._PyNNAL__weight_matrix[:] = \
+            # reduce_influence(out_high, projections[w_idx], POST, n_to_delete=1)
+        
+        if loop > base_train_loops:
+            projections[w_idx]._PyNNAL__weight_matrix[:] = \
+                structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
+                    {}, {})
+                    # pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
+
+
+            projections[w_idx]._PyNNAL__weight_matrix[:] = \
+                reduce_influence(k_high[k], projections[w_idx], PRE)
+
 
     k_spikes.append(_k_spikes)
     ik_spikes.append(_ik_spikes)
     out_spikes.append(_out_spikes)
     iout_spikes.append(_io_spikes)
+
+    np.savez_compressed("experiment_at_loop_%03d.npz"%loop,
+        kenyon_spikes=k_spikes, ik_spikes=ik_spikes, 
+        decision_spikes=out_spikes, iout_spikes=iout_spikes,
+        weights=weights, args=args, sim_time=weight_sample_dt,
+        sample_dt=sample_dt,
+        input_spikes=spike_times, input_vectors=input_vecs,
+        input_samples=samples, sample_indices=sample_indices,
+        n_test_samples=n_test_samples,
+    )
+    
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    print("-----------------------------------------------------------")
+    
 
 post_horn = []
 secs_to_run = time.time() - t0

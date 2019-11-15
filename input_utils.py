@@ -41,7 +41,7 @@ def generate_input_vectors(num_vectors, dimension, on_probability, seed=1):
     n_active = int(on_probability*dimension)
     fname = 'vectors_{}_{}_{}_{}.npz'.format(num_vectors, dimension, n_active, seed)
     if os.path.isfile(fname):
-        f = np.load(fname)
+        f = np.load(fname, allow_pickle=True)
         return f['vectors']
 
     np.random.seed(seed)
@@ -63,7 +63,7 @@ def generate_spike_times_poisson(input_vectors, num_samples, sample_dt, start_dt
         num_samples, input_vectors.shape[0], input_vectors.shape[1], sample_dt, high_freq, seed)
 
     if not regenerate and os.path.isfile(fname):
-        f = np.load(fname)
+        f = np.load(fname, allow_pickle=True)
         return f['indices'], f['spike_times'].tolist()
 
     np.random.seed(seed)
@@ -105,7 +105,7 @@ def generate_spike_times_poisson(input_vectors, num_samples, sample_dt, start_dt
     return indices, spike_times
 
 
-def generate_samples(input_vectors, num_samples, prob_noise, seed=1, method='exact', regenerate=False):
+def generate_samples(input_vectors, num_samples, n_test, prob_noise, seed=1, method='exact', regenerate=False):
     """method='all' means randomly choose indices where we flip 1s and 0s with probability = prob_noise"""
     np.random.seed(seed)
 
@@ -113,7 +113,7 @@ def generate_samples(input_vectors, num_samples, prob_noise, seed=1, method='exa
         input_vectors.shape[0], input_vectors.shape[1], num_samples, seed)
 
     if os.path.isfile(fname) and not regenerate:
-        f = np.load(fname)
+        f = np.load(fname, allow_pickle=True)
         return f['samples']
 
     samples = None
@@ -124,8 +124,8 @@ def generate_samples(input_vectors, num_samples, prob_noise, seed=1, method='exa
 
         samp = np.tile(input_vectors[i, :], (num_samples, 1)).astype('int')
         if method == 'random':
-            base_flips = int(np.mean(input_vectors.sum(axis=1)) * prob_noise)
-            for j in range(num_samples):
+            base_flips = int(np.round(np.mean(input_vectors.sum(axis=1)) * prob_noise))
+            for j in range(num_samples-n_test):
                 # flip zeros to ones
                 n_flips = base_flips #+ np.random.randint(-1, 2)
                 indices = np.random.choice(np.where(samp[j] == 0)[0], size=n_flips, replace=False)
@@ -137,18 +137,18 @@ def generate_samples(input_vectors, num_samples, prob_noise, seed=1, method='exa
                 samp[j, indices] = 0
 
         elif method == 'exact':
-            n_flips = int(np.mean(input_vectors.sum(axis=1)) * prob_noise)
-            for j in range(num_samples):
-                # flip zeros to ones
-                indices = np.random.choice(np.where(samp[j] == 0)[0], size=n_flips, replace=False)
-                samp[j, indices] = 1
-
+            n_flips = int(np.round(np.mean(input_vectors.sum(axis=1)) * prob_noise))
+            for j in range(num_samples-n_test):
                 #flip ones to zeros
                 indices = np.random.choice(np.where(samp[j] == 1)[0], size=n_flips, replace=False)
                 samp[j, indices] = 0
+
+                # flip zeros to ones
+                indices = np.random.choice(np.where(samp[j] == 0)[0], size=n_flips, replace=False)
+                samp[j, indices] = 1
         else:
             dice = np.random.uniform(0., 1., samp.shape)
-            whr = np.where(dice < prob_noise)
+            whr = np.where(dice[:-n_test, :] < prob_noise)
             samp[whr] = 1 - samp[whr]
 
         if samples is None:
@@ -160,36 +160,43 @@ def generate_samples(input_vectors, num_samples, prob_noise, seed=1, method='exa
 
     np.savez_compressed(fname, samples=samples)
 
-    sys.stdout.write('\n')
+    sys.stdout.write('\nSamples shape = {}\n'.format(samples.shape))
     sys.stdout.flush()
 
     return samples
 
-def samples_to_spike_times(samples, sample_dt, start_dt, max_rand_dt, sim_timestep, seed=1,
+def samples_to_spike_times(samples, n_samples, n_test, sample_dt, start_dt, max_rand_dt, sim_timestep, seed=1,
     randomize_samples=False, regenerate=False):
 
     fname = 'spike_times_{}_{}_{}_{}_{}.npz'.format(
         samples.shape[0], samples.shape[1], sample_dt, start_dt, seed)
 
     if not regenerate and os.path.isfile(fname):
-        f = np.load(fname)
+        f = np.load(fname, allow_pickle=True)
         return f['indices'], f['spike_times'].tolist()
 
 
 
     spike_times = [[] for _ in range(samples.shape[-1])]
-    indices = np.arange(samples.shape[0])
+    total_samples = samples.shape[0]
+    n_train = n_samples - n_test
+    orig_indices = np.tile(np.arange(n_samples), total_samples // n_samples)
+    train_indices = np.where(orig_indices < n_train)[0]
+    test_indices = np.where(orig_indices >= n_train)[0]
+    
     if randomize_samples:
         np.random.seed()
-        np.random.shuffle(indices)
+        np.random.shuffle(train_indices)
+        np.random.shuffle(test_indices)
         np.random.seed()
-        np.random.shuffle(indices)
+        np.random.shuffle(train_indices)
+        np.random.shuffle(test_indices)
         # np.random.shuffle(indices)
 
     np.random.seed(seed)
     t = 0
-    total = float(len(indices))
-    for i, idx in enumerate(indices):
+    total = float(len(orig_indices))
+    for i, idx in enumerate(train_indices):
         sys.stdout.write('\r\t\t%6.2f%%'%(100*((i+1.0)/total)))
         sys.stdout.flush()
 
@@ -206,11 +213,35 @@ def samples_to_spike_times(samples, sample_dt, start_dt, max_rand_dt, sim_timest
                 spike_times[neuron_id].append(ts[time_id])
 
         t += sample_dt
+
+
+    for j, idx in enumerate(test_indices):
+        sys.stdout.write('\r\t\t%6.2f%%'%(100*((i+j+1.0)/total)))
+        sys.stdout.flush()
+
+        samp = samples[idx]
+        active = np.where(samp == 1.)[0]
+        # max_start_dt = (sample_dt - start_dt)
+        rand_start_dt = 0#np.random.randint(-start_dt, start_dt)
+        rand_dt = np.random.randint(-max_rand_dt, max_rand_dt+1, size=active.size).astype('float') \
+                    if max_rand_dt > 0 else np.zeros(active.shape)
+        rand_dt *= sim_timestep
+        ts = t + rand_start_dt + start_dt + rand_dt
+        for time_id, neuron_id in enumerate(active):
+            if ts[time_id] not in spike_times[neuron_id]:
+                spike_times[neuron_id].append(ts[time_id])
+
+        t += sample_dt
+
+
+    
     np.random.seed()
 
     sys.stdout.write('\n')
     sys.stdout.flush()
-
+    
+    indices = np.append(train_indices, test_indices)
+    
     np.savez_compressed(fname, spike_times=spike_times, indices=indices)
 
     return indices, spike_times

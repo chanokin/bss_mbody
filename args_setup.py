@@ -21,11 +21,12 @@ def get_args():
         help='Global rescaling factor for synaptic strength (weights)' )
     parser.add_argument('w2s', type=float,
         help='Synaptic strength (weights) sufficient to make a neuron spike' )
-
+    parser.add_argument('wafer', type=int)
+    
     parser.add_argument('--backend', '-b', type=str, default=BSS,
         help='PyNN simulator backend')
     
-    parser.add_argument('--probAL', type=float, default=0.2,
+    parser.add_argument('--probAL', type=float, default=0.1,
         help='Probability of active cells in the Antennae Lobe')
     parser.add_argument('--nPatternsAL', type=int, default=10,
         help='Number of patterns for the Antennae Lobe')
@@ -36,7 +37,7 @@ def get_args():
     parser.add_argument('--probNoiseSamplesAL', type=float, default=0.1,
         help='Probability of neurons in the Antennae Lobe flipping state')
 
-    parser.add_argument('--probAL2KC', type=float, default=0.15,
+    parser.add_argument('--probAL2KC', type=float, default=0.2,
         help='Probability of connectivity between the Antennae Lobe and the Kenyon cells')
     parser.add_argument('--probAL2LH', type=float, default=0.5,
         help='Probability of connectivity between the Antennae Lobe and the Lateral Horn')
@@ -63,4 +64,5 @@ def get_args():
     parser.add_argument('--hicann_seed', type=int, default=2,
         help='Random seed to generate placements for populations on BSS chips')
 
+    
     return parser.parse_args()

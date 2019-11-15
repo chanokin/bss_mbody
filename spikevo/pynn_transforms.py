@@ -17,7 +17,7 @@ import os
 import sys
 from pprint import pprint
 from analyse_run import get_high_spiking
-
+import copy
 
 try:
     from pyhalbe import HICANN
@@ -128,6 +128,7 @@ class PyNNAL(object):
             
             calib_path = per_sim_params.get("calib_path",
                             "/wang/data/calibration/brainscales/wip")
+                            #  "/wang/data/calibration/brainscales/current")
             
             marocco.calib_path = calib_path
             marocco.defects.path = marocco.calib_path
@@ -138,7 +139,7 @@ class PyNNAL(object):
             
             setup_args['marocco'] = marocco
             self.marocco = marocco
-            
+            self.SYNAPSE_DECODER_DISABLED_SYNAPSE = HICANN.SynapseDecoder(1)
             
             
 
@@ -195,6 +196,7 @@ class PyNNAL(object):
     
     def set_digital_weights(self, digital_weight=15, zero_all=False, blacklists={}):
         runtime = self.BSS_runtime
+        original_decoders = {}
         for k in sorted(self._projections.keys()):
             proj = self._projections[k]
             if proj._digital_weights_ is None:
@@ -221,20 +223,33 @@ class PyNNAL(object):
                 thr = (min_w + max_w)/2.0
                 mw = proj.__weight_matrix[pre, post]
                 if np.isnan(mw):
-                    dw = 0
+                    dw = 0.0
                 else:
                     if mw < thr or zero_all or \
                         pre in fr_black or post in to_black:
-                        dw = 0
+                        dw = 0.0
                     else:
                         dw = digital_w
 
                 dw_sum += int(dw > 0)
+                
                 proxy = runtime.wafer()[synapse.toHICANNOnWafer()].synapses[synapse]
-                proxy.weight = HICANN.SynapseWeight(dw)
+                
+                if synapse not in original_decoders:
+                    original_decoders[synapse] = copy.copy(proxy.decoder)
 
-            print("\n\n-----------------------------------------------------------------")
-            print("projection %s sum of digital weights = %s \n\n"%(k, dw_sum))
+                if dw > 0:
+                    proxy.weight = HICANN.SynapseWeight(dw)
+                    proxy.decoder = original_decoders[synapse]
+                else:
+                    print("++--++ DISABLE_SYNAPSE --++--")
+                    print("pre, post, mw = {}, {}, {}".format(pre, post, mw))
+                    proxy.weight = HICANN.SynapseWeight(0)
+                    proxy.decoder = self.SYNAPSE_DECODER_DISABLED_SYNAPSE
+                    print("--++-- END OF DISABLE_SYNAPSE ++--++")
+
+            # print("\n\n-----------------------------------------------------------------")
+            # print("projection %s sum of digital weights = %s \n\n"%(k, dw_sum))
             
 
     def run(self, duration, gmax=1023, gmax_div=1, min_max_weights=None, 
@@ -247,25 +262,23 @@ class PyNNAL(object):
             if self._first_run:
                 # self._do_BSS_placement()
                 # self.marocco.skip_mapping = True
-
+                seed = 0
+                self.marocco.l1_routing.shuffle_switches_seed(seed)
+                
                 self.marocco.skip_mapping = False
                 self.marocco.backend = PyMarocco.None
 
-                sys.stdout.write('-------------FIRST RESET ----------------\n')
+                sys.stdout.write('\n-------------FIRST RESET ----------------\n')
                 sys.stdout.flush()
                 self._sim.reset()
                 
-                sys.stdout.write('-------------FIRST RUN ----------------\n')
+                sys.stdout.write('\n------ NO HARDWARE RUN / MAPPING %s --------\n\n\n'%seed)
                 sys.stdout.flush()
                 self._sim.run(duration)
                 
-                self.marocco.skip_mapping = True
                 
-                # scale into 4-bit res
-                # self.marocco.skip_mapping = True                
-                self.marocco.backend = PyMarocco.Hardware
-                # Full configuration during first step
-                self.marocco.hicann_configurator = pysthal.ParallelHICANNv4Configurator()
+                # self.marocco.skip_mapping = True
+
                 
                 # set gmax values per hicann
                 wafer = self.BSS_runtime.wafer()                
@@ -283,33 +296,44 @@ class PyNNAL(object):
                         
                         self._BSS_set_hicann_sthal_params(wafer, hicann, p_gmax)
                 
+                self._bss_blacklists = {}
 
+                sys.stdout.write('\n------ HARDWARE RUN / NO MAPPING %s --------\n\n\n'%seed)
+                sys.stdout.flush()
+                
+                # scale into 4-bit res
+                self.marocco.skip_mapping = True                
+                self.marocco.backend = PyMarocco.Hardware
+                # Full configuration during first step
+                self.marocco.hicann_configurator = pysthal.ParallelHICANNv4Configurator()
+                
 ### detecting noise neurons
 ### this shouldn't be here!!! 
 ### or it should only depend on the type of population, i.e. non-source ones
 ### pop.__class__.__name__.lower().startswith('SpikeSource') <=> continue!
-                test_time = 500
-                init_noise_count = 5
-                self.set_digital_weights(zero_all=True)
-                self._sim.run(test_time) #ms
-                pre_labels = [k for k in self._populations.keys() \
-                                if k.lower().startswith('kenyon')]
+
+                # test_time = 500
+                # init_noise_count = 5
+                # self.set_digital_weights(zero_all=True)
+                # self._sim.run(test_time) #ms
+                # pre_labels = [k for k in self._populations.keys() \
+                                # if k.lower().startswith('kenyon')]
                 
-                pre_spikes = {
-                    k: self.get_spikes(self._populations[k]) for k in pre_labels
-                }
+                # pre_spikes = {
+                    # k: self.get_spikes(self._populations[k]) for k in pre_labels
+                # }
                 
-                hi_pre = {
-                    k: get_high_spiking(pre_spikes[k], 0, test_time, init_noise_count) for k in pre_spikes
-                }
+                # hi_pre = {
+                    # k: get_high_spiking(pre_spikes[k], 0, test_time, init_noise_count) for k in pre_spikes
+                # }
                 
-                post_spikes = self.get_spikes(self._populations['Decision Neurons'])
-                hi_post = get_high_spiking(post_spikes, 0, test_time, init_noise_count)
+                # post_spikes = self.get_spikes(self._populations['Decision Neurons'])
+                # hi_post = get_high_spiking(post_spikes, 0, test_time, init_noise_count)
                 
-                self._bss_blacklists = {
-                    k: set(hi_pre[k].keys()) for k in hi_pre
-                }
-                self._bss_blacklists['Decision Neurons'] = set(hi_post.keys())
+
+                    # k: set(hi_pre[k].keys()) for k in hi_pre
+                # }
+                # self._bss_blacklists['Decision Neurons'] = set(hi_post.keys())
                 
 
                 # f = open("black_list_stats.txt", "a+")
@@ -324,16 +348,19 @@ class PyNNAL(object):
                 # print(lengths)
                 # sys.exit(0)
                 
-                self._sim.reset()
-                self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
-                self._first_run = False
+                # self._sim.reset()
+                # self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
 
 ### end of detecting noise neurons
+                self._first_run = False
+
                 self.set_digital_weights(blacklists=self._bss_blacklists)
                 self._sim.run(duration)
             else:
                 self._sim.reset()
                 self.marocco.hicann_configurator = pysthal.NoResetNoFGConfigurator()
+                self.marocco.verification = PyMarocco.Skip
+                self.marocco.checkl1locking = PyMarocco.SkipCheck
                 
                 self.set_digital_weights(blacklists=self._bss_blacklists)
                 self._sim.run(duration)
@@ -529,17 +556,20 @@ class PyNNAL(object):
                 if (isinstance(weights, np.ndarray) or isinstance(weights, list)):
                     if len(weights) > 0:
                         whr = np.where(np.abs(weights) > 0.0)
-                        w_min = np.min(np.abs(weights[whr]))
+                        if len(whr[0]):
+                            w_min = np.min(np.abs(weights[whr]))
+                        else:
+                            w_min = 0
                     else:
                         w_min = 0
-                        w_max = 0
+                        w_max = 10
                 else:
-                    w_min = np.min(np.abs(weights))
+                    w_min = max(0.0, np.min(weights))
 
                 try:
-                    w_max = np.max(np.abs(weights))
+                    w_max = np.max(weights)
                 except:
-                    w_max = 0
+                    w_max = 10
                 
             
             proj = sim.Projection(pre_pop, dest_pop, conn,

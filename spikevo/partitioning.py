@@ -190,7 +190,9 @@ class SplitProjection(object):
         self.digital_weights = digital_weights
         self.pynnal = pynnal
         self.source = source_pop
+        self.n_pre = source_pop.size
         self.destination = dest_pop
+        self.n_post = dest_pop.size
         self.conn_class = conn_class
         self.weights = weights
         
@@ -322,7 +324,8 @@ class SplitProjection(object):
                                digital_weights=self.digital_weights)
 
     def all_to_all_connector(self, pre, post, conn, w, d, tgt, params, lbl, stdp=None):
-        return self.stats_connector(pre, post, conn, w, d, tgt, params, lbl, stdp,                  digital_weights=self.digital_weights)
+        return self.stats_connector(pre, post, conn, w, d, tgt, params, 
+                                    lbl, stdp, digital_weights=self.digital_weights)
 
     def from_list_connector(self, pre, post, conn, w, d, tgt, params, lbl, stdp=None):
         pynnal = self.pynnal
@@ -368,3 +371,20 @@ class SplitProjection(object):
                 mtx[r0:rN, c0:cN] = weights
 
         return mtx
+    
+    def updateWeightMatrix(self, weights):
+        pynnal = self.pynnal
+        mtx = np.ones((self.source.size, self.destination.size)) * np.inf
+        for row in self._projections:
+            for col in self._projections[row]:
+                part = self._projections[row][col]
+                pre_ids = part['ids']['pre']
+
+                r0, rN = np.min(pre_ids), np.max(pre_ids) + 1
+                
+                post_ids = part['ids']['post']
+                c0, cN = np.min(post_ids), np.max(post_ids) + 1
+
+                part['proj']._PyNNAL__weight_matrix[:] = weights[r0:rN, c0:cN]
+
+

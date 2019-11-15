@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import operator
 from collections import OrderedDict
+from spikevo.partitioning import SplitProjection
 
 def get_high_spiking(spikes, start_t, end_t, min_num_spikes):
     # print("\n\nIn get_high_spiking\n\n")
@@ -12,7 +13,7 @@ def get_high_spiking(spikes, start_t, end_t, min_num_spikes):
         times = np.array(ts)
         whr = np.where(np.logical_and(start_t <= times, times < end_t))[0]
         
-        if len(whr) > min_num_spikes:
+        if len(whr) >= min_num_spikes:
             neurons[nid] = len(whr)
     
     # print(neurons)
@@ -68,12 +69,12 @@ def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights,
                     elif np.random.uniform(0., 1.) <= rand_add_prob: # post didn't spike but randomly increase synapses
                         ws[pre, post] += up_w
                     # else: # and if post didn't spike, not sensitive to pattern
-                    #     ws[pre, post] -= down_w # decrease synapse
+                        # ws[pre, post] -= down_w # decrease synapse
 
-                elif post_ts.size > 0: # pre didn't spike but post did
-                        ws[pre, post] -= down_w # pre is not part of the pattern, decrease synapse
+                # elif post_ts.size > 0: # pre didn't spike but post did
+                        # ws[pre, post] -= down_w # pre is not part of the pattern, decrease synapse
                 # elif np.random.uniform(0., 1.) <= rand_del_prob: # we have no pairs, randomly reduce synapse
-                #         ws[pre, post] = 0
+                        # ws[pre, post] = 0
 
 
     # #keep noisy neurons at bay ... hopefully
@@ -82,8 +83,8 @@ def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights,
     #     ws[pre, :] = 0
 
     # for post in post_blacklist:
-    #     post = int(post)
-    #     ws[:, post] = 0
+        # post = int(post)
+        # ws[:, post] = 0
 
     ws[:] = np.clip(ws, 0.0, max_w) ### keep weights positive
 
@@ -92,24 +93,72 @@ def structural_plasticity(pre_spikes_binned, post_spikes_binned, weights,
 
 PRE, POST = range(2)
 def reduce_influence(high_spiking_ids, projection, pre_or_post=PRE, n_to_delete=1):
-    _ws = projection._PyNNAL__weight_matrix.copy()
-
-    # if it's a pre-syn population, we want to remove influence immediately
-    if pre_or_post == PRE:
-        _ws[high_spiking_ids, :] = 0
-    else:
-        for hsi in high_spiking_ids:
-            n_del = n_to_delete
-            on = np.where(_ws[:, hsi] > 0)[0]
-            if len(on) == 0: 
-                continue
-            while len(on) < n_del:
-                n_del -= 1
-            to_del = np.random.choice(on, size=n_del, replace=False)
-            _ws[to_del, hsi] = 0
     
-    projection._PyNNAL__weight_matrix[:] = _ws
+    if isinstance(projection, SplitProjection):
+        shape = (projection.n_pre, projection.n_post)
+        weights = np.zeros(shape)
+        for pre in projection._projections:
+            for post in projection._projections[pre]:
+                proj = projection._projections[pre][post]['proj']
+                
+                _ws = proj._PyNNAL__weight_matrix.copy()
+                # print("\n{} to {} before".format(pre, post))
+                # print(_ws)
+                # if it's a pre-syn population, we want to remove influence immediately
+                if pre_or_post == PRE:
+                    _ws[high_spiking_ids.keys(), :] = 0
+                else:
+                    for hsi in high_spiking_ids.keys():
+                        n_del = np.copy(n_to_delete)
+                        on = np.where(_ws[:, hsi] > 0)[0]
+                        if len(on) == 0: 
+                            continue
+                        if len(on) < n_del:
+                            n_del = len(on)
+                        # n_del = np.random.randint(n_del)
+                        # if n_del == 0:
+                            # continue
+                        to_del = np.random.choice(on, size=n_del, replace=False)
+                        # print("to_del, hsi ", to_del, hsi)
+                        _ws[to_del, hsi] = 0
 
-    return _ws
+                # print("{} to {} diff".format(pre, post))
+                # print(np.abs(proj._PyNNAL__weight_matrix - _ws))
+                # print()
+                
+                # proj._PyNNAL__weight_matrix[:] = _ws
+                pres = projection._projections[pre][post]['ids']['pre']
+                weights[pres, :] = _ws
+        
+        return weights
+        
+                
+    else:
+        _ws = projection._PyNNAL__weight_matrix.copy()
+        # print("\n{} before".format(projection))
+        # print(_ws)
+
+        # if it's a pre-syn population, we want to remove influence immediately
+        if pre_or_post == PRE:
+            _ws[high_spiking_ids.keys(), :] = 0
+        else:
+            for hsi in high_spiking_ids.keys():
+                n_del = n_to_delete
+                on = np.where(_ws[:, hsi] > 0)[0]
+                if len(on) == 0: 
+                    continue
+                if len(on) < n_del:
+                    n_del = len(on)
+                to_del = np.random.choice(on, size=n_del, replace=False)
+                # print("to_del, hsi ", to_del, hsi)
+                _ws[to_del, hsi] = 0
+
+        # print("{} diff".format(projection))
+        # print(np.abs(projection._PyNNAL__weight_matrix - _ws))
+        # print()
+        
+        # projection._PyNNAL__weight_matrix[:] = _ws
+
+        return _ws
 
 
