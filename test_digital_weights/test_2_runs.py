@@ -1,3 +1,10 @@
+import matplotlib
+matplotlib.use('Agg')
+
+import matplotlib.pyplot as plt
+import numpy as np
+import copy
+
 from pyhalbe import HICANN
 import pyhalbe.Coordinate as C
 from pymarocco import PyMarocco, Defects
@@ -8,8 +15,6 @@ from pymarocco import Defects
 import pysthal
 from pysthal.command_line_util import init_logger
 import pyhmf as sim
-import numpy as np
-import copy
 
 init_logger("WARN", [
     ("guidebook", "INFO"),
@@ -64,7 +69,7 @@ def list_conn(n_pre, n_post, prob, w, d):
     return [(pre, post, w, d) for pre in range(n_pre) for n_post in range(n_post) \
                 if np.random.uniform() <= prob]
 
-def zero_digital_weights(projections, total_in, total_out, bss_runtime, digital_w=2):
+def zero_digital_weights(projections, total_in, total_out, bss_runtime, digital_w=15):
     n_per_out = total_out // len(projections[0])
     in_mtx = np.zeros((total_in, total_out))
     for i, prjs in enumerate(projections):
@@ -98,8 +103,9 @@ def zero_digital_weights(projections, total_in, total_out, bss_runtime, digital_
                 if syn not in original_decoders:
                     original_decoders[syn] = copy.copy(proxy.decoder)
 
-                if np.isnan(w) or w < 0.0:
+                if np.isnan(w) or w <= 0.0:
                     proxy.weight = HICANN.SynapseWeight(0)
+                    ### SETTING SYNAPSE TO DISABLED DECODER, DISABLING SYNAPSE
                     proxy.decoder = SYNAPSE_DECODER_DISABLED_SYNAPSE
                 else:
                     proxy.weight = HICANN.SynapseWeight(digital_w)
@@ -204,4 +210,20 @@ sim.run(duration)
 spikes = [p.getSpikes() for p in mid_pops]
 
 sim.end()
+
+n_spikes_per_out_neuron = []
+for s in spikes:
+    n_spikes_per_out_neuron += [len(times) for times in s]
+
+sum_input_weights_per_out_neuron = []
+for c in range(out_weights.shape[1]):
+    sum_input_weights_per_out_neuron.append(out_weights[:, c].sum())
+
+fig = plt.figure()
+ax = plt.subplot(1, 1, 1)
+plt.plot(sum_input_weights_per_out_neuron, n_spikes_per_out_neuron, '.')
+ax.set_xlabel('Sum of input weights')
+ax.set_ylabel('Total spikes')
+plt.savefig('test_setting_digital_weights_to_zero_after_first_run.pdf')
+plt.close(fig)
 
