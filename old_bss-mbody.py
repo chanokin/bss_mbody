@@ -11,8 +11,8 @@ import sys
 import time
 import datetime
 from spikevo import *
-# from spikevo.pynn_transforms import PyNNAL
-# from spikevo.wafer import Wafer as WAL
+from spikevo.pynn_transforms import PyNNAL
+from spikevo.wafer import Wafer as WAL
 import argparse
 from pprint import pprint
 from args_setup import get_args
@@ -28,7 +28,7 @@ import pyhalbe.Coordinate as C
 # from pymarocco.results import Marocco
 # from pymarocco import Defects
 # from pysthal.command_line_util import init_logger
-import pyhmf as sim
+# import pyhmf as pynn_local
 
 # init_logger("WARN", [
     # ("guidebook", "INFO"),
@@ -37,11 +37,7 @@ import pyhmf as sim
     # ("sthal", "INFO")
 # ])
 
-def list_to_matrix(pre_pop, post_pop, conn_list):
-    mtx = np.ones((pre_pop.size, post_pop.size)) * np.nan
-    for pre, post, w, d in conn_lists:
-        mtx[pre, post] = w
-    return mtx
+
 
 def get_hicanns(center_hicann, n_kenyon, seed=1, max_dist=3, n_per_pop=4, manual=False):
     if manual:
@@ -133,14 +129,13 @@ def input_connection_list(input_size, kenyon_size, prob_conn, weight, seed=111):
     dice = np.random.uniform(0., 1., size=(input_size * kenyon_size))
     active = np.where(dice <= prob_conn)[0]
     
-    conn_list = [[] for _ in range(input_size)]
-    for conn_id in active:
-        pre_id = conn_id // kenyon_size
-        post_id = conn_id % kenyon_size
-        conn_lists[pre_id].append( [pre_id, post_id, weight, 1] )
-        
+    matrix[active, 2] = weight
+    # print(matrix)
+    # print(dice.size, active.size, float(dice.size)/active.size)
+    # sys.exit(0)
     np.random.seed()
 
+    conn_list = [[int(pre), int(post), w, d] for pre, post, w, d in matrix]
     return conn_list
     
 
@@ -200,11 +195,7 @@ def output_pairing_connection_list(decision_size, neighbour_distance, weight, de
 
     return conn_list
 
-STRINGABLE = [
-    'nAL', 'nKC', 'nDN', 'probAL', 
-    'probNoiseSamplesAL', 'nPatternsAL'
-]
-def args_to_str(arguments, stringable=STRINGABLE):
+def args_to_str(arguments, stringable=['nAL', 'nKC', 'nDN', 'probAL', 'probNoiseSamplesAL', 'nPatternsAL']):
 
     d = vars(arguments)
     arglist = []
@@ -223,7 +214,7 @@ pprint(args)
 
 backend = args.backend
 
-neuron_class = sim.IF_cond_exp
+neuron_class = 'IF_cond_exp'
 # heidelberg's brainscales seems to like these params
 
 e_rev = 92  # mV
@@ -363,31 +354,15 @@ if args.renderSpikes:
 ### -------------------------------------------------------------- ###
 ### -------------------------------------------------------------- ###
 ### -------------------------------------------------------------- ###
-### ======================   SIM INIT   ========================== ###
 
 sys.stdout.write('Creating simulator abstraction\n')
 sys.stdout.flush()
 
-wafer = int(os.environ.get("WAFER", 33))
-marocco = PyMarocco()
-marocco.backend = PyMarocco.Hardware
-
-marocco.default_wafer = C.Wafer(wafer)
-runtime = Runtime(marocco.default_wafer)
-
-# calib_path = "/wang/data/calibration/brainscales/WIP-2018-09-18"
-# marocco.calib_path = calib_path
-# marocco.defects.path = marocco.calib_path
-
-marocco.verification = PyMarocco.Skip
-marocco.checkl1locking = PyMarocco.SkipCheck
-marocco.continue_despite_synapse_loss = True
-
-SYNAPSE_DECODER_DISABLED_SYNAPSE = HICANN.SynapseDecoder(1)
 
 
-sim.setup(timestep=1.0, min_delay=1.0, marocco=marocco, marocco_runtime=runtime)
-
+pynnx = PyNNAL(backend)
+pynnx.setup(timestep=timestep, min_delay=timestep, 
+            per_sim_params={'wafer': args.wafer})
 
 sys.stdout.write('Done!\tCreating simulator abstraction\n\n')
 sys.stdout.flush()
@@ -419,19 +394,26 @@ print("\n\nnumber of neurons in per kenyon subpop = {}\n".format(nkc))
 #######################################################################
 
 populations = {
-    'antenna': [
-        sim.Population(1, sim.SpikeSourceArray,
-            {'spike_times': spike_times[i]}, label='Antennae Lobe',)
-        for i in range(args.nAL)
-    ],
-    'decision': sim.Population(args.nDN, neuron_class,
-                          decision_parameters, label='Decision Neurons',),
+    'antenna': pynnx.Pop(args.nAL, 'SpikeSourceArray',
+                         {'spike_times': spike_times}, label='Antennae Lobe',
+                         hicann=hicanns['antenna']),
+    'decision': pynnx.Pop(args.nDN, neuron_class,
+                          decision_parameters, label='Decision Neurons',
+                          hicann=hicanns['decision'],
+                          gmax=1023
+                          ),
 
-    'inh_decision': sim.Population(1, neuron_class,
-                        decision_parameters, label='Inh Decision Neuron',),
+    'inh_decision': pynnx.Pop(1, neuron_class,
+                              decision_parameters, label='Inh Decision Neuron',
+                              hicann=hicanns['exciter'],
+                              gmax=1023
+                              ),
 
-    'inh_kenyon': sim.Population(1, neuron_class,
-                    decision_parameters, label='Inh Kenyon Neuron',),
+    'inh_kenyon': pynnx.Pop(1, neuron_class,
+                            decision_parameters, label='Inh Kenyon Neuron',
+                            hicann=hicanns['feedback'],
+                            gmax=1023
+                            ),
 
     ### make neurons spike right before a new pattern is shown
     # 'tick': pynnx.Pop(1, 'SpikeSourceArray',
@@ -457,16 +439,25 @@ populations = {
 i2t = lambda x: "%02d"%x
 for i in range(div_kc):
     kpop = 'kenyon_%s'%(i2t(i))
-    populations[kpop] = sim.Population(nkc, neuron_class,
-                            kenyon_parameters, label='Kenyon Cell %d'%i,)
-    populations[kpop].record()
+    populations[kpop] = pynnx.Pop(nkc, neuron_class,
+                            kenyon_parameters, label='Kenyon Cell %d'%i,
+                            hicann=hicanns['kenyon'][i],
+                            gmax=1023
+                            )
+    pynnx.set_recording(populations[kpop], 'spikes')
 
-populations['decision'].record()
-populations['inh_decision'].record()
-populations['inh_kenyon'].record()
+pynnx.set_recording(populations['decision'], 'spikes')
+pynnx.set_recording(populations['inh_decision'], 'spikes')
+pynnx.set_recording(populations['inh_kenyon'], 'spikes')
 np.random.seed()
 # populations['decision'].initialize(v=np.random.uniform(-120.0, -50.0, size=args.nDN))
 
+if record_all:
+    pynnx.set_recording(populations['horn'], 'spikes')
+    pynnx.set_recording(populations['feedback'], 'spikes')
+    pynnx.set_recording(populations['decision'], 'v')
+    pynnx.set_recording(populations['kenyon'], 'v')
+    pynnx.set_recording(populations['exciter'], 'spikes')
 
 sys.stdout.write('Creating projections\n')
 sys.stdout.flush()
@@ -542,27 +533,27 @@ stdp = {
     }
 }
 
-
-conn_lists = {
-    'DN to IDN': all_to_all(
-        populations['decision'], populations['inh_decision'],
-        weights=static_w['EXC'], delays=timestep),
-    'IDN to DN': all_to_all(
-        populations['inh_decision'], populations['decision'],
-        weights=static_w['INH'], delays=timestep),
-}
-
 projections = {
      ### Inhibitory feedback --- decision neurons
-    'DN to IDN': sim.Projection(
-        populations['decision'], populations['inh_decision'],
-        sim.FromListConnector(conn_lists['DN to IDN']), 
-        target='excitatory', label='DN to IDN',),
+    'DN to IDN': pynnx.Proj(populations['decision'], populations['inh_decision'],
+                           'FromListConnector', weights=None, delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(
+                                    populations['decision'], populations['inh_decision'],
+                                    weights=static_w['EXC'], delays=timestep)}, 
+                            target='excitatory', label='DN to IDN',
+                            digital_weights=15
+                           ),
 
-    'IDN to DN': sim.Projection(
-        populations['inh_decision'], populations['decision'],
-        sim.FromListConnector(conn_lists['IDN to DN']), 
-        target='inhibitory', label='IDN to DN',),
+    'IDN to DN': pynnx.Proj(populations['inh_decision'], populations['decision'],
+                           'FromListConnector', weights=None, delays=None,
+                            conn_params={'conn_list': 
+                                all_to_all(
+                                    populations['inh_decision'], populations['decision'],
+                                    weights=static_w['INH'], delays=timestep)}, 
+                            target='inhibitory', label='IDN to DN',
+                            digital_weights=15
+                           ),
 
     ### make decision spike just before the next pattern to reduce weights corresponding to that input
     # 'DN to FB': pynnx.Proj(populations['decision'], populations['feedback'],
@@ -591,16 +582,6 @@ projections = {
                            # target='excitatory', label='TRS to TR'),
 
 }
-
-projections['DN to IDN'].__matrix__ = list_to_matrix(
-    populations['decision'], populations['inh_decision'],
-    conn_lists['DN to IDN'])
-
-projections['IDN to DN'].__matrix__ = list_to_matrix(
-    populations['inh_decision'], populations['decision'],
-    conn_lists['IDN to DN'])
-
-
 for i in range(div_kc):
     kAL2KC = 'AL to KC_%s'%(i2t(i))
     kpop = 'kenyon_%s'%(i2t(i))
@@ -609,32 +590,26 @@ for i in range(div_kc):
     #                             conn_params={'p_connect': args.probAL2KC}, label=kAL2KC,
     #                             # digital_weights=1
     #                             )
-    
-    
-    projections[kAL2KC] = []
-    for pre_id in in_lists[i]:
-        projections[kAL2KC].append(sim.Projection(
-            populations['antenna'][pre_id], populations[kpop],
-            sim.FromListConnector(in_lists[i][pre_id]), 
-            label=kAL2KC, target='excitatory',
-        ))
-        
-        projections[kAL2KC][pre_id].__matrix__ = list_to_matrix(
-            populations['antenna'][pre_id], populations[kpop],
-            in_lists[i][pre_id]
-        )
-    
+
+    projections[kAL2KC] = pynnx.Proj(populations['antenna'], populations[kpop],
+                                'FromListConnector', weights=None, delays=None,
+                                conn_params={'conn_list': in_lists[i]}, label=kAL2KC,
+                                digital_weights=10,
+                                target='excitatory',
+                                )
+
     kKC2DN = 'KC_%s to DN'%(i2t(i))
-    projections[kKC2DN] = sim.Projection(
-        populations[kpop], populations['decision'],
-        sim.FromListConnector(out_lists[i]), 
-        label=kKC2DN, target='excitatory',
-    )
-    
-    projections[kKC2DN].__matrix__ = list_to_matrix(
-        populations[kpop], populations['decision'],
-        out_lists[i]
-    )
+    projections[kKC2DN] = pynnx.Proj(populations[kpop], populations['decision'],
+                                weights=None, delays=None,
+                                conn_class='FromListConnector', 
+                                conn_params={'conn_list': out_lists[i]}, 
+                                # conn_class='FixedProbabilityConnector', 
+                                # conn_params={'p_connect': 0.1}, 
+                                label=kKC2DN,
+                                # stdp=stdp,
+                                digital_weights=4,
+                                target='excitatory',
+                                )
 
     # kKC2IKC = 'KC_%s to IKC'%(i2t(i))
     # projections[kKC2IKC] = pynnx.Proj(populations[kpop], populations['inh_kenyon'],
@@ -656,6 +631,10 @@ for i in range(div_kc):
                             # target='inhibitory', label=kIKC2KC,
                             # digital_weights=15,
                             # )
+
+
+sys.stdout.write('Running simulation\n')
+sys.stdout.flush()
 
 
 sweights = []
@@ -684,51 +663,6 @@ noise_count_threshold_out = args.nSamplesAL * 0.8
 n_loops = 100
 base_train_loops = 10
 
-
-
-### ====================== PERFORM MAPPING =========================== ###
-
-
-
-sys.stdout.write('\n\n\nMaping simulation\n\n\n')
-sys.stdout.flush()
-
-seed = 0
-marocco.l1_routing.shuffle_switches_seed(seed)
-
-marocco.skip_mapping = False
-marocco.backend = PyMarocco.None
-
-sim.reset()
-sim.run(weight_sample_dt)
-
-
-
-### ===================   SET HICANN PARAMS   ======================== ###
-
-
-wafer = runtime.wafer()
-hicanns_in_use = wafer.getAllocatedHicannCoordinates()
-
-for hicann in hicanns_in_use:
-    _BSS_set_hicann_sthal_params(wafer, hicann, 1023)
-
-
-marocco.skip_mapping = True
-marocco.backend = PyMarocco.Hardware
-# Full configuration during first step
-marocco.hicann_configurator = pysthal.ParallelHICANNv4Configurator()
-
-
-
-### ======================   HARDWARE RUNS   ========================= ###
-
-
-
-
-sys.stdout.write('Running simulation\n')
-sys.stdout.flush()
-
 print("num loops = {}\ttime per loop {}".format(n_loops, weight_sample_dt))
 now = datetime.datetime.now()
 sys.stdout.write(
@@ -752,8 +686,7 @@ for loop in np.arange(n_loops):
 
     ### ---------------------------------
     ### run experiment 
-    
-    sim.run(weight_sample_dt) 
+    pynnx.run(weight_sample_dt) 
 
     f = open('it_ran_log.txt', 'a+')
     f.write(u'%s\n'%(args.hicann_seed))
@@ -775,7 +708,7 @@ for loop in np.arange(n_loops):
     for k in sorted(projections.keys()):
         if k.startswith('KC') and k.endswith('to DN'):
             # tmp_w[k] = pynnx.get_weights(projections[k])
-            tmp_w[k] = projections[k].__matrix__.copy()
+            tmp_w[k] = projections[k]._PyNNAL__weight_matrix.copy()
 
         if k.startswith('AL') and 'KC' in k:
             n_pre, n_post = projections[k].n_pre, projections[k].n_post
