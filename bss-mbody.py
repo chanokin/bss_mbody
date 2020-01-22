@@ -37,6 +37,67 @@ import pyhmf as sim
     # ("sthal", "INFO")
 # ])
 
+SYNAPSE_DECODER_DISABLED_SYNAPSE = HICANN.SynapseDecoder(1)
+
+def secs_to_hms(seconds):
+    mins_to_run = seconds // 60
+    seconds -= mins_to_run * 60
+    hours_to_run = mins_to_run // 60
+    mins_to_run -= hours_to_run * 60
+    seconds, mins_to_run, hours_to_run = int(seconds), int(mins_to_run), int(hours_to_run)
+
+    return '{:02d}h: {:02d}m: {:02d}s'.format(hours_to_run, mins_to_run, seconds)
+
+
+def reduce_influence(neuron_ids, weights, pre_or_post, n_to_delete):
+    if pre_or_post.lower() == 'post':
+        for _id in neuron_ids:
+            on_w = np.where(logical_and(~ np.isnan(weights[:, _id]),
+                                        weights[:, _id] > 0))[0]
+            if len(on_w) >= n_to_delete:
+                del_ids = np.random.choice(on_w, size=n_to_delete, replace=False)
+                weights[del_ids, _id] = np.nan
+    else:
+        for _id in neuron_ids:
+            on_w = np.where(logical_and(~ np.isnan(weights[_id, :]),
+                                        weights[_id, :] > 0))[0]
+            if len(on_w) >= n_to_delete:
+                del_ids = np.random.choice(on_w, size=n_to_delete, replace=False)
+                weights[_id, del_ids] = np.nan
+                
+    return weights
+
+def set_digital_weights(weights, projection, bss_runtime, digital_w=15):
+    total_in, total_out = weights.shape
+
+    original_decoders = {}
+    for i, prjs in enumerate(projections):
+        for j, p in enumerate(prjs):
+            rtime_res = bss_runtime.results()
+            synapses = rtime_res.synapse_routing.synapses()
+            proj_items = synapses.find(p)
+
+            for _item in proj_items:
+                syn = _item.hardware_synapse()
+                pre = _item.source_neuron().neuron_index()
+                post = _item.target_neuron().neuron_index()
+                w = weights[pre, post]
+
+                proxy = runtime.wafer()[syn.toHICANNOnWafer()].synapses[syn]
+                if syn not in original_decoders:
+                    original_decoders[syn] = copy.copy(proxy.decoder)
+
+                if np.isnan(w):
+                    proxy.weight = HICANN.SynapseWeight(0)
+                    ### SETTING SYNAPSE TO DISABLED DECODER, DISABLING SYNAPSE
+                    proxy.decoder = SYNAPSE_DECODER_DISABLED_SYNAPSE
+                elif w <= 0.0:
+                    proxy.weight = HICANN.SynapseWeight(0)
+                    proxy.decoder = original_decoders[syn]
+                else:
+                    proxy.weight = HICANN.SynapseWeight(digital_w)
+                    proxy.decoder = original_decoders[syn]
+
 def list_to_matrix(pre_pop, post_pop, conn_list):
     mtx = np.ones((pre_pop.size, post_pop.size)) * np.nan
     for pre, post, w, d in conn_lists:
@@ -383,7 +444,6 @@ marocco.verification = PyMarocco.Skip
 marocco.checkl1locking = PyMarocco.SkipCheck
 marocco.continue_despite_synapse_loss = True
 
-SYNAPSE_DECODER_DISABLED_SYNAPSE = HICANN.SynapseDecoder(1)
 
 
 sim.setup(timestep=1.0, min_delay=1.0, marocco=marocco, marocco_runtime=runtime)
@@ -552,6 +612,7 @@ conn_lists = {
         weights=static_w['INH'], delays=timestep),
 }
 
+weight_matrices = {}
 projections = {
      ### Inhibitory feedback --- decision neurons
     'DN to IDN': sim.Projection(
@@ -592,11 +653,11 @@ projections = {
 
 }
 
-projections['DN to IDN'].__matrix__ = list_to_matrix(
+weight_matrices['DN to IDN'] = list_to_matrix(
     populations['decision'], populations['inh_decision'],
     conn_lists['DN to IDN'])
 
-projections['IDN to DN'].__matrix__ = list_to_matrix(
+weight_matrices['IDN to DN'] = list_to_matrix(
     populations['inh_decision'], populations['decision'],
     conn_lists['IDN to DN'])
 
@@ -611,7 +672,7 @@ for i in range(div_kc):
     #                             )
     
     
-    projections[kAL2KC] = []
+    weight_matrices[kAL2KC] = []
     for pre_id in in_lists[i]:
         projections[kAL2KC].append(sim.Projection(
             populations['antenna'][pre_id], populations[kpop],
@@ -619,7 +680,7 @@ for i in range(div_kc):
             label=kAL2KC, target='excitatory',
         ))
         
-        projections[kAL2KC][pre_id].__matrix__ = list_to_matrix(
+        weight_matrices[kAL2KC][pre_id] = list_to_matrix(
             populations['antenna'][pre_id], populations[kpop],
             in_lists[i][pre_id]
         )
@@ -631,7 +692,7 @@ for i in range(div_kc):
         label=kKC2DN, target='excitatory',
     )
     
-    projections[kKC2DN].__matrix__ = list_to_matrix(
+    weight_matrices[kKC2DN] = list_to_matrix(
         populations[kpop], populations['decision'],
         out_lists[i]
     )
@@ -681,8 +742,8 @@ total_t = sample_dt * args.nSamplesAL * args.nPatternsAL
 weight_sample_dt = total_t
 noise_count_threshold = args.nSamplesAL * 5.0
 noise_count_threshold_out = args.nSamplesAL * 0.8
-n_loops = 100
-base_train_loops = 10
+n_loops = 3
+base_train_loops = max(n_loops, 10)
 
 
 
@@ -752,7 +813,16 @@ for loop in np.arange(n_loops):
 
     ### ---------------------------------
     ### run experiment 
-    
+    for k in projections:
+        proj = projections[k]
+        ws = weight_matrices[k]
+        if isinstance(proj, list):
+            for proj_idx, local_proj in enumerate(proj):
+                set_digital_weights(ws[proj_idx], local_proj, runtime)
+                
+        else:
+            set_digital_weights(ws, proj, runtime)
+                
     sim.run(weight_sample_dt) 
 
     f = open('it_ran_log.txt', 'a+')
@@ -760,37 +830,12 @@ for loop in np.arange(n_loops):
     f.close()
 
     secs_to_run = time.time() - loop_t0
-    mins_to_run = secs_to_run // 60
-    secs_to_run -= mins_to_run * 60
-    hours_to_run = mins_to_run // 60
-    mins_to_run -= hours_to_run * 60
-    secs_to_run, mins_to_run, hours_to_run = int(secs_to_run), int(mins_to_run), int(hours_to_run)
 
-    sys.stdout.write('lasted {:02d}h: {:02d}m: {:02d}s\n'.format(hours_to_run, mins_to_run, secs_to_run))
+    sys.stdout.write('lasted {}\n'.format(secs_to_hms(secs_to_run)))
     sys.stdout.flush()
 
-    ### ---------------------------------
-    ### get weights from KCx to DN
-    tmp_w.clear()
-    for k in sorted(projections.keys()):
-        if k.startswith('KC') and k.endswith('to DN'):
-            # tmp_w[k] = pynnx.get_weights(projections[k])
-            tmp_w[k] = projections[k].__matrix__.copy()
-
-        if k.startswith('AL') and 'KC' in k:
-            n_pre, n_post = projections[k].n_pre, projections[k].n_post
-            arr = np.zeros((n_pre, n_post))
-            for pre_label in projections[k]._projections:
-                for post_label in projections[k]._projections[pre_label]:
-                    proj = projections[k]._projections[pre_label][post_label]['proj']
-                    pres = projections[k]._projections[pre_label][post_label]['ids']['pre']
-                    
-                    arr[pres, :] = proj._PyNNAL__weight_matrix
-            tmp_w[k] = arr
-            
-    
     # print(loop, tmp_w.shape)
-    weights.append(tmp_w.copy())
+    weights.append(weight_matrices.copy())
     
     ### ---------------------------------
     ### grab spikes to do further learning (blacklist and structural plasticity)
@@ -799,8 +844,8 @@ for loop in np.arange(n_loops):
 
     sys.stdout.write('\tKenyon\n')
     sys.stdout.flush()
-    _k_spikes = {k: pynnx.get_record(populations[k], 'spikes') \
-                for k in populations if k.lower().startswith('kenyon')}
+    _k_spikes = {k: populations[k].getSpikes()
+                    for k in populations if k.lower().startswith('kenyon')}
     bk_spikes = {k: bin_spikes_per_sample(0, weight_sample_dt, sample_dt, _k_spikes[k]) \
                  for k in populations if k.lower().startswith('kenyon')}
     
@@ -812,7 +857,7 @@ for loop in np.arange(n_loops):
 
     sys.stdout.write('\tDecision\n')
     sys.stdout.flush()
-    _out_spikes = pynnx.get_record(populations['decision'], 'spikes')
+    _out_spikes = populations['decision'].getSpikes()
     bout_spikes = bin_spikes_per_sample(0, weight_sample_dt, sample_dt, _out_spikes)
     osum = 0
     for times in _out_spikes:
@@ -820,8 +865,8 @@ for loop in np.arange(n_loops):
     print("\n%s sum = %s"%('output', osum))
 
 
-    _ik_spikes = pynnx.get_record(populations['inh_kenyon'], 'spikes')
-    _io_spikes = pynnx.get_record(populations['inh_decision'], 'spikes')
+    _ik_spikes = populations['inh_kenyon'].getSpikes()
+    _io_spikes = populations['inh_decision'].getSpikes()
 
 
 
@@ -835,50 +880,43 @@ for loop in np.arange(n_loops):
     ### Update blacklists
     ### reduce in-K weights
     for k in sorted(k_high.keys()):
-        print(k)
         int_idx = int(k.split("_")[-1])
-        print(int_idx)
         w_idx = "AL to KC_%s"%(i2t(int_idx))
         pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
-        print(k, int_idx, w_idx, pynnx_k)
-        print(k_high[k].keys())
         # if loop < base_train_loops:
         if loop < 2:
-            projections[w_idx].updateWeightMatrix(
-                reduce_influence(k_high[k], projections[w_idx], POST, n_to_delete=1))
+            neuron_ids = k_high[k]
+            n_to_delete = 1
+            for w_idx, ws in enumerate(weight_matrices[w_idx]):
+                weight_matrices[w_idx][w_idx][:] = \
+                    reduce_influence(neuron_ids, ws, 'post', n_to_delete)
+            
+                
 
     ### reduce K-iK weights
     ### reduce D-iD weights
     
     # Kenyon Cell %d
     # Decision 
-    for k in sorted(bk_spikes.keys()):
-        print(k)
-        int_idx = int(k.split("_")[-1])
-        print(int_idx)
-        w_idx = "KC_%s to DN"%(i2t(int_idx))
-        pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
-        print(k, int_idx, w_idx, pynnx_k)
-        print(tmp_w[w_idx].shape)
-        print("Decision Neurons")
-        # print(pynnx._bss_blacklists["Decision Neurons"])
-        print(out_high.keys())
-        # print("BLACKLIST - %s"%pynnx_k)
-        # print(pynnx._bss_blacklists[pynnx_k])
-                ### reduce K-D weights
+    # for k in sorted(bk_spikes.keys()):
+        # print(k)
+        # int_idx = int(k.split("_")[-1])
+        # print(int_idx)
+        # w_idx = "KC_%s to DN"%(i2t(int_idx))
+        # pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
+        # print(k, int_idx, w_idx, pynnx_k)
+        # print(tmp_w[w_idx].shape)
+        # print("Decision Neurons")
+        # print(out_high.keys())
         
-        # projections[w_idx]._PyNNAL__weight_matrix[:] = \
-            # reduce_influence(out_high, projections[w_idx], POST, n_to_delete=1)
-        
-        if loop > base_train_loops:
-            projections[w_idx]._PyNNAL__weight_matrix[:] = \
-                structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
-                    {}, {})
-                    # pynnx._bss_blacklists[pynnx_k], pynnx._bss_blacklists["Decision Neurons"])
+        # if loop > base_train_loops:
+            # projections[w_idx]._PyNNAL__weight_matrix[:] = \
+                # structural_plasticity(bk_spikes[k], bout_spikes, tmp_w[w_idx],
+                    # {}, {})
 
 
-            projections[w_idx]._PyNNAL__weight_matrix[:] = \
-                reduce_influence(k_high[k], projections[w_idx], PRE)
+            # projections[w_idx]._PyNNAL__weight_matrix[:] = \
+                # reduce_influence(k_high[k], projections[w_idx], PRE)
 
 
     k_spikes.append(_k_spikes)
@@ -907,12 +945,6 @@ for loop in np.arange(n_loops):
 
 post_horn = []
 secs_to_run = time.time() - t0
-
-mins_to_run = secs_to_run // 60
-secs_to_run -= mins_to_run * 60
-hours_to_run = mins_to_run // 60
-mins_to_run -= hours_to_run * 60
-secs_to_run, mins_to_run, hours_to_run = int(secs_to_run), int(mins_to_run), int(hours_to_run)
 
 sys.stdout.write('\n\nDone!\tRunning simulation - lasted {:02d}h: {:02d}m: {:02d}s\n\n'. \
                  format(hours_to_run, mins_to_run, secs_to_run))
@@ -975,7 +1007,7 @@ for k in projections:
 sys.stdout.write('Done!\t Getting weights\n\n')
 sys.stdout.flush()
 
-pynnx.end()
+sim.end()
 
 sys.stdout.write('Saving experiment\n')
 sys.stdout.flush()
