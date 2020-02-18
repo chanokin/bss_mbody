@@ -10,273 +10,40 @@ import matplotlib.pyplot as plt
 import sys
 import time
 import datetime
-from spikevo import *
+import copy
+
+# from spikevo import *
 # from spikevo.pynn_transforms import PyNNAL
 # from spikevo.wafer import Wafer as WAL
 import argparse
 from pprint import pprint
 from args_setup import get_args
 from input_utils import *
-from analyse_run import *
 
-# from pyhalbe import HICANN
+from pyhalbe import HICANN
 import pyhalbe.Coordinate as C
-# from pysthal.command_line_util import init_logger
-# from pymarocco import PyMarocco
-# from pymarocco.runtime import Runtime
-# from pymarocco.coordinates import LogicalNeuron
-# from pymarocco.results import Marocco
-# from pymarocco import Defects
-# from pysthal.command_line_util import init_logger
+from pymarocco import PyMarocco
+from pymarocco.runtime import Runtime
+from pymarocco.coordinates import LogicalNeuron
+from pymarocco.results import Marocco
+from pymarocco import Defects
+import pysthal
+from pysthal.command_line_util import init_logger
 import pyhmf as sim
 
-# init_logger("WARN", [
-    # ("guidebook", "INFO"),
-    # ("marocco", "INFO"),
-    # ("Calibtic", "INFO"),
-    # ("sthal", "INFO")
-# ])
+from bss_utils import *
+from bss_utils import _BSS_set_hicann_sthal_params
+import bss_utils
+print(dir(bss_utils))
 
-SYNAPSE_DECODER_DISABLED_SYNAPSE = HICANN.SynapseDecoder(1)
-
-def secs_to_hms(seconds):
-    mins_to_run = seconds // 60
-    seconds -= mins_to_run * 60
-    hours_to_run = mins_to_run // 60
-    mins_to_run -= hours_to_run * 60
-    seconds, mins_to_run, hours_to_run = int(seconds), int(mins_to_run), int(hours_to_run)
-
-    return '{:02d}h: {:02d}m: {:02d}s'.format(hours_to_run, mins_to_run, seconds)
+init_logger("WARN", [
+    ("guidebook", "INFO"),
+    ("marocco", "INFO"),
+    ("Calibtic", "INFO"),
+    ("sthal", "INFO")
+])
 
 
-def reduce_influence(neuron_ids, weights, pre_or_post, n_to_delete):
-    if pre_or_post.lower() == 'post':
-        for _id in neuron_ids:
-            on_w = np.where(logical_and(~ np.isnan(weights[:, _id]),
-                                        weights[:, _id] > 0))[0]
-            if len(on_w) >= n_to_delete:
-                del_ids = np.random.choice(on_w, size=n_to_delete, replace=False)
-                weights[del_ids, _id] = np.nan
-    else:
-        for _id in neuron_ids:
-            on_w = np.where(logical_and(~ np.isnan(weights[_id, :]),
-                                        weights[_id, :] > 0))[0]
-            if len(on_w) >= n_to_delete:
-                del_ids = np.random.choice(on_w, size=n_to_delete, replace=False)
-                weights[_id, del_ids] = np.nan
-                
-    return weights
-
-def set_digital_weights(weights, projection, bss_runtime, digital_w=15):
-    total_in, total_out = weights.shape
-
-    original_decoders = {}
-    for i, prjs in enumerate(projections):
-        for j, p in enumerate(prjs):
-            rtime_res = bss_runtime.results()
-            synapses = rtime_res.synapse_routing.synapses()
-            proj_items = synapses.find(p)
-
-            for _item in proj_items:
-                syn = _item.hardware_synapse()
-                pre = _item.source_neuron().neuron_index()
-                post = _item.target_neuron().neuron_index()
-                w = weights[pre, post]
-
-                proxy = runtime.wafer()[syn.toHICANNOnWafer()].synapses[syn]
-                if syn not in original_decoders:
-                    original_decoders[syn] = copy.copy(proxy.decoder)
-
-                if np.isnan(w):
-                    proxy.weight = HICANN.SynapseWeight(0)
-                    ### SETTING SYNAPSE TO DISABLED DECODER, DISABLING SYNAPSE
-                    proxy.decoder = SYNAPSE_DECODER_DISABLED_SYNAPSE
-                elif w <= 0.0:
-                    proxy.weight = HICANN.SynapseWeight(0)
-                    proxy.decoder = original_decoders[syn]
-                else:
-                    proxy.weight = HICANN.SynapseWeight(digital_w)
-                    proxy.decoder = original_decoders[syn]
-
-def list_to_matrix(pre_pop, post_pop, conn_list):
-    mtx = np.ones((pre_pop.size, post_pop.size)) * np.nan
-    for pre, post, w, d in conn_lists:
-        mtx[pre, post] = w
-    return mtx
-
-def get_hicanns(center_hicann, n_kenyon, seed=1, max_dist=3, n_per_pop=4, manual=False):
-    if manual:
-        f = open("black_list_stats.txt", "a+")
-        f.write(u"%s, -*-\n"%seed)
-        f.close()
-
-        np.random.seed(seed)
-        ID, ROW, COL = range(3)
-        w = WAL()
-        hood = w.get_neighbours(center_hicann, max_dist=max_dist)
-        ids = []
-        for r in hood:
-            for c in hood[r]:
-                ids.append(hood[r][c][ID])
-
-        pprint(hood)
-        print(ids)
-        
-        pops = ['antenna', 'decision', 
-                'feedback', 'exciter',
-                # 'tick', 'exciter_src',
-                # 'kenyon',
-                ]
-        ### ideal config is in a 3x3 grid
-        places = {}
-        blacklist = []
-        # ## blacklist = [73, 76, 99, 17, 18, 19, 20, 21, 37, 47, 167, 56, 6, 5, 7, 80, 100, 14]
-        used = [] + blacklist
-                
-        k_places = []
-        for i in range(n_kenyon):
-            avail = np.setdiff1d(ids, used)
-            np.random.choice(avail, size=n_kenyon, replace=False)
-            hicann_id = np.random.choice(avail, size=n_per_pop)
-
-            hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
-            for i in hicann_id:
-                used.append(i)
-            k_places.append(hicann)
-            
-        places['kenyon'] = k_places
-
-        for p in pops:
-            avail = np.setdiff1d(ids, used)
-            hicann_id = np.random.choice(avail, size=n_per_pop)
-            hicann = [C.HICANNOnWafer(C.Enum(i)) for i in hicann_id]
-            places[p] = hicann
-            for i in hicann_id:
-                used.append(i)
-
-
-        
-        for k in sorted(places):
-            for p in places[k]:
-                try:
-                    sys.stdout.write("{},".format(int(p.id())))
-                except:
-                    for q in p:
-                        sys.stdout.write("{},".format(int(q.id())))
-        print()
-        print(places)
-    else:
-        places = {
-            'antenna': None,
-            'kenyon': [None] * n_kenyon,
-            'decision': None,
-            'tick': None,
-            'feedback': None,
-            'exciter src': None,
-            'exciter': None,
-        }
-    
-    return places
-
-def all_to_all(pre_pop, post_pop, weights=1.0, delays=1.0):
-    return [[pre, post, weights, delays] 
-            for pre in range(pre_pop.size) for post in range(post_pop.size)]
-
-def input_connection_list(input_size, kenyon_size, prob_conn, weight, seed=111):
-    matrix = np.ones((input_size * kenyon_size, 4))
-    matrix[:, 0] = np.repeat(np.arange(input_size), kenyon_size)
-    matrix[:, 1] = np.tile(np.arange(kenyon_size), input_size)
-
-    np.random.seed(seed)
-
-    matrix[:, 2] = 0
-
-    dice = np.random.uniform(0., 1., size=(input_size * kenyon_size))
-    active = np.where(dice <= prob_conn)[0]
-    
-    conn_list = [[] for _ in range(input_size)]
-    for conn_id in active:
-        pre_id = conn_id // kenyon_size
-        post_id = conn_id % kenyon_size
-        conn_lists[pre_id].append( [pre_id, post_id, weight, 1] )
-        
-    np.random.seed()
-
-    return conn_list
-    
-
-def gain_control_list(input_size, horn_size, max_w, cutoff=0.7):
-    if cutoff is not None:
-        n_cutoff = int(cutoff * horn_size)
-    else:
-        n_cutoff = 15
-    matrix = np.ones((input_size * horn_size, 4))
-    matrix[:, 0] = np.repeat(np.arange(input_size), horn_size)
-    matrix[:, 1] = np.tile(np.arange(horn_size), input_size)
-
-    matrix[:, 2] = np.tile(max_w / (n_cutoff + 1.0 + np.arange(horn_size)), input_size)
-
-    return matrix
-
-
-def output_connection_list(kenyon_size, decision_size, prob_active, active_weight,
-                           inactive_scaling, delay=1, seed=1, clip_to=np.inf):
-    matrix = np.ones((kenyon_size * decision_size, 4)) * delay
-    matrix[:, 0] = np.repeat(np.arange(kenyon_size), decision_size)
-    matrix[:, 1] = np.tile(np.arange(decision_size), kenyon_size)
-
-    np.random.seed(seed)
-
-    inactive_weight = active_weight * inactive_scaling
-    matrix[:, 2] = np.clip(np.random.normal(inactive_weight, inactive_weight * 0.2,
-                                            size=(kenyon_size * decision_size)),
-                           0, clip_to)
-
-    dice = np.random.uniform(0., 1., size=(kenyon_size * decision_size))
-    active = np.where(dice <= prob_active)[0]
-    matrix[active, 2] = np.clip(np.random.normal(active_weight, active_weight * 0.2,
-                                                 size=active.shape),
-                                0, clip_to)
-    
-    n_above = (matrix[:, 2] > (inactive_weight + active_weight)/2.0).sum()
-    n_total = float(matrix[:, 2].size)
-    print("n_above, n_total, n_above/n_total")
-    print(n_above, n_total, n_above/n_total)
-    np.random.seed()
-    # pprint(np.where(matrix[:, 2] < 0.0))
-    # return matrix
-    conn_list = [[int(pre), int(post), w, d] for pre, post, w, d in matrix]
-    return conn_list
-
-
-def output_pairing_connection_list(decision_size, neighbour_distance, weight, delay=1):
-    conn_list = []
-    half_dist = neighbour_distance // 2
-    for nid in range(decision_size):
-        for ndist in range(-half_dist, half_dist + 1):
-            neighbour = nid + ndist
-            if neighbour < 0 or ndist == 0 or neighbour >= decision_size:
-                continue
-            conn_list.append([nid, neighbour, weight, delay])
-
-    return conn_list
-
-STRINGABLE = [
-    'nAL', 'nKC', 'nDN', 'probAL', 
-    'probNoiseSamplesAL', 'nPatternsAL'
-]
-def args_to_str(arguments, stringable=STRINGABLE):
-
-    d = vars(arguments)
-    arglist = []
-    for arg in d:
-        v = str(d[arg])
-        if arg not in stringable:
-            continue
-        v = v.replace('.', 'p')
-        arglist.append('{}_{}'.format(arg, v))
-
-    return '__'.join(arglist)
 
 
 args = get_args()
@@ -291,25 +58,35 @@ e_rev = 92  # mV
 # e_rev = 500.0 #mV
 
 base_params = {
-    # 'cm': 0.1,  # nF
-    'cm': 0.1,  # nF
+    #3 'cm': 0.1,  # nF
+    'cm': 0.2,  # nF
     'v_reset': -70.,  # mV
     'v_rest': -65.,  # mV
     'v_thresh': -50.,  # mV
-    # 'v_thresh': -50.,  # mV
-    # 'e_rev_I': -e_rev, #mV
-    # 'e_rev_E': 0.,#e_rev, #mV
-    # 'tau_m': 10.,  # ms
+    #3 'v_thresh': -50.,  # mV
+    #3 'e_rev_I': -e_rev, #mV
+    #3 'e_rev_E': 0.,#e_rev, #mV
+    #3 'tau_m': 10.,  # ms
     'tau_m': 10.,  # ms
-    'tau_refrac': 10.,  # ms
+    'tau_refrac': 1.,  # ms
     'tau_syn_E': 1.0,  # ms
-    'tau_syn_I': 1.0,  # ms
-
+    'tau_syn_I': 5.0,  # ms
+    
+    # 'cm': 0.01,
+    # 'v_reset': -20.,
+    # 'v_rest': -20.,
+    # 'v_thresh': -10,
+    # 'e_rev_I': -100.,
+    # 'e_rev_E': 60.,
+    # 'tau_m': 20.,
+    # 'tau_refrac': 0.1,
+    # 'tau_syn_E': 5.,
+    # 'tau_syn_I': 5.,
 }
 
 base_params['e_rev_I'] = -e_rev
-base_params['e_rev_E'] = e_rev
-# base_params['e_rev_E'] = 0.0
+# base_params['e_rev_E'] = e_rev
+base_params['e_rev_E'] = 0.0
 
 
 kenyon_parameters = base_params.copy()
@@ -607,6 +384,7 @@ conn_lists = {
     'DN to IDN': all_to_all(
         populations['decision'], populations['inh_decision'],
         weights=static_w['EXC'], delays=timestep),
+        
     'IDN to DN': all_to_all(
         populations['inh_decision'], populations['decision'],
         weights=static_w['INH'], delays=timestep),
@@ -671,18 +449,23 @@ for i in range(div_kc):
     #                             # digital_weights=1
     #                             )
     
-    
-    weight_matrices[kAL2KC] = []
-    for pre_id in in_lists[i]:
+    projections[kAL2KC] = []
+    weight_matrices[kAL2KC] = [None for _ in range(args.nAL)]
+    for pre_id, _in_conn_list in enumerate(in_lists[i]):
+        print("\t{} to {}".format(pre_id, i))
+        print("\t{}\tto \n\t{}".format(populations['antenna'][pre_id], populations[kpop]))
+        for r in _in_conn_list:
+            print("\t\t{}".format(r))
+
         projections[kAL2KC].append(sim.Projection(
             populations['antenna'][pre_id], populations[kpop],
-            sim.FromListConnector(in_lists[i][pre_id]), 
+            sim.FromListConnector(_in_conn_list), 
             label=kAL2KC, target='excitatory',
         ))
         
         weight_matrices[kAL2KC][pre_id] = list_to_matrix(
             populations['antenna'][pre_id], populations[kpop],
-            in_lists[i][pre_id]
+            _in_conn_list
         )
     
     kKC2DN = 'KC_%s to DN'%(i2t(i))
@@ -740,9 +523,9 @@ else:
 
 total_t = sample_dt * args.nSamplesAL * args.nPatternsAL
 weight_sample_dt = total_t
-noise_count_threshold = args.nSamplesAL * 5.0
+noise_count_threshold = max(0, int(args.nSamplesAL * 0.0))
 noise_count_threshold_out = args.nSamplesAL * 0.8
-n_loops = 3
+n_loops = 5
 base_train_loops = max(n_loops, 10)
 
 
@@ -799,11 +582,17 @@ k_spikes = []
 ik_spikes = []
 out_spikes = []
 iout_spikes = []
+w_list = []
 tmp_w = {}
 t0 = time.time()
 for loop in np.arange(n_loops):
+
+    sys.stdout.write("\n\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    sys.stdout.write("\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    sys.stdout.write("\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    sys.stdout.flush()
     
-    sys.stdout.write("\n\n\trunning loop {} of {}\t".format(loop + 1, n_loops))
+    sys.stdout.write("\n\trunning loop {} of {}\t".format(loop + 1, n_loops))
     sys.stdout.flush()
 
     loop_t0 = time.time()
@@ -816,7 +605,9 @@ for loop in np.arange(n_loops):
     for k in projections:
         proj = projections[k]
         ws = weight_matrices[k]
-        if isinstance(proj, list):
+        print(k)
+        if 'AL to KC' in k:
+            print("proj is a list")
             for proj_idx, local_proj in enumerate(proj):
                 set_digital_weights(ws[proj_idx], local_proj, runtime)
                 
@@ -875,8 +666,14 @@ for loop in np.arange(n_loops):
     k_high = {\
         k: get_high_spiking(_k_spikes[k], 0, weight_sample_dt, noise_count_threshold) \
                   for k in _k_spikes if k.lower().startswith('kenyon')}
+    
+    print("k_high")
+    print(k_high)
+    
     out_high = get_high_spiking(_out_spikes, 0, weight_sample_dt, noise_count_threshold_out)
     
+    w_list.append(copy.deepcopy(weight_matrices))
+
     ### Update blacklists
     ### reduce in-K weights
     for k in sorted(k_high.keys()):
@@ -884,11 +681,11 @@ for loop in np.arange(n_loops):
         w_idx = "AL to KC_%s"%(i2t(int_idx))
         pynnx_k = "Kenyon Cell %s"%(i2t(int_idx))
         # if loop < base_train_loops:
-        if loop < 2:
+        if loop < 20:
             neuron_ids = k_high[k]
-            n_to_delete = 1
-            for w_idx, ws in enumerate(weight_matrices[w_idx]):
-                weight_matrices[w_idx][w_idx][:] = \
+            n_to_delete = 10
+            for pre_idx, ws in enumerate(weight_matrices[w_idx]):
+                weight_matrices[w_idx][pre_idx][:] = \
                     reduce_influence(neuron_ids, ws, 'post', n_to_delete)
             
                 
@@ -923,7 +720,7 @@ for loop in np.arange(n_loops):
     ik_spikes.append(_ik_spikes)
     out_spikes.append(_out_spikes)
     iout_spikes.append(_io_spikes)
-
+    # w_list.append(copy.deepcopy(weight_matrices))
     np.savez_compressed("experiment_at_loop_%03d.npz"%loop,
         kenyon_spikes=k_spikes, ik_spikes=ik_spikes, 
         decision_spikes=out_spikes, iout_spikes=iout_spikes,
@@ -932,6 +729,8 @@ for loop in np.arange(n_loops):
         input_spikes=spike_times, input_vectors=input_vecs,
         input_samples=samples, sample_indices=sample_indices,
         n_test_samples=n_test_samples,
+        weight_matrices=weight_matrices,
+        w_list=w_list,
     )
     
     print("-----------------------------------------------------------")
@@ -942,53 +741,26 @@ for loop in np.arange(n_loops):
     print("-----------------------------------------------------------")
     print("-----------------------------------------------------------")
     
+w_list.append(copy.deepcopy(weight_matrices))
 
 post_horn = []
 secs_to_run = time.time() - t0
 
-sys.stdout.write('\n\nDone!\tRunning simulation - lasted {:02d}h: {:02d}m: {:02d}s\n\n'. \
-                 format(hours_to_run, mins_to_run, secs_to_run))
+sys.stdout.write('\n\nDone!\tRunning simulation - lasted {}\n'.format(secs_to_hms(secs_to_run)))
 sys.stdout.flush()
 
 
 
-if record_all:
-    # sys.stdout.write('\tHorn\n')
-    # sys.stdout.flush()
-    # horn_spikes = pynnx.get_record(populations['horn'], 'spikes')
-
-    # sys.stdout.write('\tFeedback\n')
-    # sys.stdout.flush()
-    # fb_spikes = pynnx.get_record(populations['feedback'], 'spikes')
-    horn_spikes = [[]]
-    fb_spikes = [[]]
-
-    sys.stdout.write('\tExciter\n')
-    sys.stdout.flush()
-    exciter_spikes = pynnx.get_record(populations['exciter'], 'spikes')
-
-else:
-    horn_spikes = [[]]
-    fb_spikes = [[]]
-    exciter_spikes = [[]]
+horn_spikes = [[]]
+fb_spikes = [[]]
+exciter_spikes = [[]]
 
 sys.stdout.write('Done!\tGetting spikes\n\n')
 sys.stdout.flush()
 
 
-if record_all:
-    sys.stdout.write('Getting voltages\n')
-    sys.stdout.flush()
-
-    dn_voltage = pynnx.get_record(populations['decision'], 'v')
-    kc_voltage = pynnx.get_record(populations['kenyon'], 'v')
-
-    sys.stdout.write('Done!\tGetting voltages\n\n')
-    sys.stdout.flush()
-
-else:
-    dn_voltage = [np.array([[0, 0]])]
-    kc_voltage = [np.array([[0, 0]])]
+dn_voltage = [np.array([[0, 0]])]
+kc_voltage = [np.array([[0, 0]])]
 
 sys.stdout.write('Getting weights:\n')
 sys.stdout.flush()
@@ -999,10 +771,11 @@ final_weights = weights[-1]
 
 for k in projections:
     if k.startswith('AL to KC'):
-        wwwtmp = pynnx.get_weights(projections[k])
-        non_nan = np.where(~ np.isnan(wwwtmp))[0].size
-        print(float(non_nan)/float(wwwtmp.size))
-
+        for p in projections[k]:
+            wwwtmp = p.getWeights()
+            non_nan = np.where(~ np.isnan(wwwtmp))[0].size
+            # print(float(non_nan)/float(wwwtmp.size))
+        
 
 sys.stdout.write('Done!\t Getting weights\n\n')
 sys.stdout.flush()
@@ -1035,6 +808,7 @@ np.savez_compressed(fname, args=args, sim_time=sim_time,
                     fb_spikes=fb_spikes,
                     exciter_spikes=exciter_spikes,
                     n_test_samples=n_test_samples,
+                    w_list=w_list,
                     )
 sys.stdout.write('Done!\tSaving experiment\n\n')
 sys.stdout.flush()

@@ -1,9 +1,9 @@
 #!/bin/bash
-# module load nmpm_software/current
+module load nmpm_software/current
 # module load nmpm_software/2019-06-18-4189_5834-1
 # module load nmpm_software/2019-04-23-4189_5834-1
 # module load nmpm_software/2019-08-14-2
-module load nmpm_software/2019-08-15-5834-1
+# module load nmpm_software/2019-08-15-5834-1
 
 # HICANNS=205,52,15,77,135,80,131,172,177,8,18,106,2,245,79,168,132,31,\
 # 213,3,33,55,249,109,27,37,28,211,176,6,207,139,212,56,17,136,242,14,\
@@ -16,7 +16,7 @@ module load nmpm_software/2019-08-15-5834-1
 # 35,36,37,30,27,28,29,31,4,5,6,7,8,9,2,0,1,3,16,17,18,19,20,21,14,12,\
 # 13,15,52,53,54,55,56,57,50,47,48,49,51
 
-SELECT=1
+SELECT=0
 
 HICANNS=0,2,4,5,6,7,8,9,14,15,17,\
 18,19,20,21,27,28,29,30,31,32,33,34,35,\
